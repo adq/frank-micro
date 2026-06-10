@@ -78,8 +78,16 @@ static void process_command(char* cmd) {
         const char* q;
         if ((q = match_prefix(r, "INSERT "))) {
             while (*q == ' ') q++;
-            if (micro_mount_disk(drive, q) == 0) printf("OK drive %c = %s\n", 'A'+drive, q);
-            else printf("ERR cannot mount %s\n", q);
+            /* A bare filename (no '/') is resolved against the current disk
+             * directory so "DISK A INSERT game.ssd" finds /micro/disk/game.ssd. */
+            char resolved[MICRO_DISK_PATH_LEN + MICRO_DISK_FILENAME_LEN];
+            const char* mount_path = q;
+            if (!strchr(q, '/')) {
+                snprintf(resolved, sizeof(resolved), "%s/%s", g_micro_disk_dir, q);
+                mount_path = resolved;
+            }
+            if (micro_mount_disk(drive, mount_path) == 0) printf("OK drive %c = %s\n", 'A'+drive, mount_path);
+            else printf("ERR cannot mount %s\n", mount_path);
         } else if ((q = match_prefix(r, "EJECT"))) {
             micro_eject_disk(drive);
             printf("OK\n");

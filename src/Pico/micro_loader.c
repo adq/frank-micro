@@ -6,6 +6,7 @@
 #include "bbc.h"
 #include "disc.h"
 #include "disc_drive.h"
+#include "util.h"
 #include "ff.h"
 #include <string.h>
 #include <stdio.h>
@@ -109,6 +110,20 @@ void micro_disk_entry_path(int idx, char* buf, size_t sz) {
 int micro_mount_disk(int drive, const char* path) {
     if (!g_p_bbc) return -1;
     if (drive < 0 || drive > 1) return -1;
+
+    /* Verify the file exists and is readable BEFORE handing it to beebjit.
+     * beebjit's disc_load() path eventually calls util_file_open(), which
+     * on RP2350 hard-bails (udf #0 -> HardFault -> reboot) if the file is
+     * missing.  A wrong path or absent image must fail gracefully, not
+     * crash and lock the board. */
+    {
+        struct util_file* p_test = util_file_try_read_open(path);
+        if (!p_test) {
+            printf("micro_loader: cannot open '%s' (not found)\n", path);
+            return -1;
+        }
+        util_file_close(p_test);
+    }
 
     bbc_add_disc(g_p_bbc, path, drive, 0, 1, 0, 0, 0);
 
