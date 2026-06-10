@@ -43,18 +43,12 @@ static const uint8_t k_stretch_data[] = {
 
 static int s_teletext_was_generated;
 
-/* Generated glyph tables.  These are large (3 × 30KB = 90KB) and would
- * exhaust SRAM on RP2350.  On Pico builds we allocate them from PSRAM. */
-#ifdef PICO_BUILD
-static uint8_t* s_teletext_generated_glyphs;
-static uint8_t* s_teletext_generated_gfx;
-static uint8_t* s_teletext_generated_sep_gfx;
-#define TELETEXT_GLYPH_TABLE_SIZE (96 * 16 * 20)
-#else
+/* Generated glyph tables — placed in SRAM for maximum rendering throughput.
+ * At 10,000 teletext chars per frame × 50fps = 500K glyph lookups/second;
+ * PSRAM latency would cost ~50% of CPU time.  90KB in SRAM is the right trade. */
 static uint8_t s_teletext_generated_glyphs[96 * 16 * 20];
 static uint8_t s_teletext_generated_gfx[96 * 16 * 20];
 static uint8_t s_teletext_generated_sep_gfx[96 * 16 * 20];
-#endif
 
 
 struct teletext_struct {
@@ -177,25 +171,6 @@ teletext_generate(void) {
   uint32_t i;
 
   s_teletext_was_generated = 1;
-
-#ifdef PICO_BUILD
-  /* Allocate glyph tables from PSRAM to save ~90KB of SRAM for BBC heap.
-   * PSRAM must be available — teletext_generate() is called from
-   * teletext_create() which runs after psram_init() in main.c. */
-  if (!s_teletext_generated_glyphs) {
-    extern void* psram_malloc(size_t);
-    s_teletext_generated_glyphs  = (uint8_t*)psram_malloc(TELETEXT_GLYPH_TABLE_SIZE);
-    s_teletext_generated_gfx     = (uint8_t*)psram_malloc(TELETEXT_GLYPH_TABLE_SIZE);
-    s_teletext_generated_sep_gfx = (uint8_t*)psram_malloc(TELETEXT_GLYPH_TABLE_SIZE);
-    /* If PSRAM unavailable, route through util_malloc (will use SRAM heap). */
-    if (!s_teletext_generated_glyphs)
-      s_teletext_generated_glyphs = (uint8_t*)util_mallocz(TELETEXT_GLYPH_TABLE_SIZE);
-    if (!s_teletext_generated_gfx)
-      s_teletext_generated_gfx = (uint8_t*)util_mallocz(TELETEXT_GLYPH_TABLE_SIZE);
-    if (!s_teletext_generated_sep_gfx)
-      s_teletext_generated_sep_gfx = (uint8_t*)util_mallocz(TELETEXT_GLYPH_TABLE_SIZE);
-  }
-#endif
 
   /* Make the ROM glyphs pretty. */
   for (i = 0; i < 96; ++i) {

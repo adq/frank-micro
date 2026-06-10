@@ -48,6 +48,7 @@
 #include "config.h"
 #include "keyboard.h"
 #include "render.h"
+#include "video.h"
 #include "sound.h"
 #include "os_sound.h"
 #include "os_channel.h"
@@ -98,7 +99,12 @@ extern volatile bool* micro_core1_ready_ptr(void);
 
 /* ── pico_vsync_handler — called from within bbc.c at every BBC vsync ────── */
 void pico_vsync_handler(int do_full_render) {
-    (void)do_full_render;
+    /* In externally-clocked (polled CRTC) mode the per-tick rendering loop is
+     * skipped for speed, so the frame is drawn here in one pass from current
+     * CRTC + video memory state before being presented. */
+    if (do_full_render && g_p_bbc) {
+        video_render_full_frame(bbc_get_video(g_p_bbc));
+    }
     micro_keyboard_poll();
     micro_frame_present();
     crash_handler_feed();  /* keep watchdog alive — Master 128 is slow via PSRAM */

@@ -227,6 +227,15 @@ struct bbc_struct {
   uint64_t last_c2;
   uint64_t cycle_count_baseline;
 
+  /* Perf instrumentation: time spent in emulation work vs. sleep, to
+   * disambiguate a pacing defect (Case A) from a too-slow interpreter (Case B).
+   */
+  uint64_t perf_emul_us_accum;
+  uint64_t perf_sleep_us_accum;
+  uint32_t perf_callback_count;
+  uint64_t perf_last_callback_us;
+  uint64_t perf_last_sleep_us;
+
   uint64_t num_hw_reg_hits;
   int log_speed;
   int log_timestamp;
@@ -2048,6 +2057,13 @@ bbc_create(int mode,
   if (util_has_option(p_opt_flags, "video:no-memory-sync")) {
     p_bbc->do_video_memory_sync = 0;
   }
+#ifdef PICO_BUILD
+  /* Track B lever: the per-6502-write CRTC sync callback
+   * (video_advance_for_memory_sync) is the single biggest interpreter cost.
+   * Dropping it roughly doubles throughput on the RP2350. Some mid-frame
+   * raster effects may be slightly less precise. */
+  p_bbc->do_video_memory_sync = 0;
+#endif
   p_bbc->do_paint_every_tick = util_has_option(p_opt_flags,
                                                "video:paint-every-tick");
 
@@ -2211,6 +2227,18 @@ bbc_create(int mode,
     externally_clocked_adc = 0;
     synchronous_sound = 1;
   }
+
+#ifdef PICO_BUILD
+  /* Track B lever: in accurate mode every peripheral is tick-accurate, i.e.
+   * advanced through the fine-grained timing countdown on every 6502 cycle.
+   * That per-tick CRTC bookkeeping dominates interpreter cost on the RP2350
+   * (~70% of all emulation time). Externally (polled) clocking advances them
+   * by wall-time delta instead, which is far cheaper, and the screen is drawn
+   * once per frame via video_render_full_frame() from the Pico vsync handler. */
+  externally_clocked_via = 1;
+  externally_clocked_crtc = 1;
+  externally_clocked_adc = 1;
+#endif
 
   p_timing = timing_create(cpu_scale_factor);
   if (util_has_option(p_log_flags, "perf:timer")) {
@@ -2793,6 +2821,19 @@ bbc_get_print_flag(struct bbc_struct* p_bbc) {
   return p_bbc->print_flag;
 }
 
+void
+bbc_get_perf_emul(struct bbc_struct* p_bbc,
+                  uint64_t* p_emul_us,
+                  uint64_t* p_sleep_us,
+                  uint32_t* p_count) {
+  *p_emul_us = p_bbc->perf_emul_us_accum;
+  *p_sleep_us = p_bbc->perf_sleep_us_accum;
+  *p_count = p_bbc->perf_callback_count;
+  p_bbc->perf_emul_us_accum = 0;
+  p_bbc->perf_sleep_us_accum = 0;
+  p_bbc->perf_callback_count = 0;
+}
+
 static void
 bbc_do_sleep(struct bbc_struct* p_bbc,
              uint64_t last_time_us,
@@ -2982,6 +3023,22 @@ bbc_cycles_timer_callback(void* p) {
   curr_time_us = os_time_get_us();
   p_bbc->last_time_us = curr_time_us;
 
+  /* Perf instrumentation. The interval between consecutive callback entries
+   * covers one chunk of emulation (cycles_per_run_normal 6502 cycles run by the
+   * CPU driver) plus this callback's own non-sleep work plus the sleep done at
+   * the end of the *previous* callback. Subtracting the previously measured
+   * sleep duration leaves the wall-clock cost of the emulation work alone.
+   */
+  if (p_bbc->perf_last_callback_us != 0) {
+    uint64_t period_us = (curr_time_us - p_bbc->perf_last_callback_us);
+    uint64_t sleep_us = p_bbc->perf_last_sleep_us;
+    uint64_t emul_us = (period_us > sleep_us) ? (period_us - sleep_us) : 0;
+    p_bbc->perf_emul_us_accum += emul_us;
+    p_bbc->perf_sleep_us_accum += sleep_us;
+    p_bbc->perf_callback_count++;
+  }
+  p_bbc->perf_last_callback_us = curr_time_us;
+
   if (p_bbc->log_timestamp) {
     log_do_log(k_log_perf,
                k_log_info,
@@ -3020,7 +3077,9 @@ bbc_cycles_timer_callback(void* p) {
       sound_tick(p_sound, curr_time_us);
     } else {
       /* This may adjust p_bbc->last_time_us to maintain smooth timing. */
+      uint64_t sleep_t0 = os_time_get_us();
       bbc_do_sleep(p_bbc, last_time_us, curr_time_us, delta_us);
+      p_bbc->perf_last_sleep_us = (os_time_get_us() - sleep_t0);
     }
   } else {
     /* Fast mode.

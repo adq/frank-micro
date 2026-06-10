@@ -24,7 +24,7 @@ extern void  psram_free(void* ptr);
 extern int   psram_is_available(void);
 #define PICO_PSRAM_BASE      0x11000000u
 #define PICO_PSRAM_END       0x12000000u
-#define PICO_PSRAM_THRESHOLD (16u * 1024u)  /* route ≥16KB to PSRAM to preserve SRAM heap */
+#define PICO_PSRAM_THRESHOLD (16u * 1024u)  /* ≥16KB → PSRAM; keeps hot small allocs in fast SRAM */
 static inline int util_is_psram_ptr(const void* p) {
   uintptr_t a = (uintptr_t)p;
   return (a >= PICO_PSRAM_BASE && a < PICO_PSRAM_END);

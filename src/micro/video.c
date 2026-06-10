@@ -1788,11 +1788,42 @@ video_render_full_frame(struct video_struct* p_video) {
                                 p_video->clock_tick_shift);
   int is_teletext = (*p_ula_control & k_ula_teletext);
 
+  /* Cursor handling. The blinking text cursor is normally drawn by the
+   * cycle-accurate per-tick render loop; that loop is bypassed in
+   * externally-clocked mode, so replicate it here. Advance the frame counter
+   * (drives the blink phase) once per rendered frame, and draw the cursor on
+   * the cell whose CRTC address matches the cursor register, on the scanlines
+   * within the cursor's raster range, when the blink phase is on. */
+  uint32_t cursor_addr = ((p_regs[k_crtc_reg_cursor_high] << 8) |
+                          p_regs[k_crtc_reg_cursor_low]) & 0x3FFF;
+  uint32_t cursor_start_raster = (p_regs[k_crtc_reg_cursor_start] & 0x1F);
+  uint32_t cursor_end_raster = (p_regs[k_crtc_reg_cursor_end] & 0x1F);
+  int cursor_disabled =
+      ((p_regs[k_crtc_reg_cursor_start] & 0x60) == 0x20);
+  p_video->crtc_frames++;
+  int cursor_blink_on = (!p_video->cursor_flashing ||
+                         (p_video->crtc_frames & p_video->cursor_flash_mask));
+  int cursor_active = (!cursor_disabled && cursor_blink_on);
+
+  /* In teletext (MODE 7) the SAA5050 glyph stream lags the CRTC address by a
+   * character cell, so the cursor must be triggered one cell later than the
+   * raw cursor address to land on the on-screen typing position. Graphics
+   * modes have no such pipeline and use the address directly. */
+  int is_teletext_cursor = (*p_ula_control & k_ula_teletext);
+  uint32_t cursor_match_addr =
+      is_teletext_cursor ? ((cursor_addr + 2) & 0x3FFF) : cursor_addr;
+
   assert(p_video->externally_clocked);
 
   if ((p_regs[k_crtc_reg_interlace] & 0x03) == 0x03) {
     num_lines += 2;
     num_lines /= 2;
+    /* Interlace sync+video (MODE 7) renders every other scanline, so the
+     * compacted scanline index runs 0..num_lines-1. The cursor raster
+     * registers (R10/R11) are in raw scanline units (e.g. 18..19), so map
+     * them into the same compacted space to keep the cursor gate alive. */
+    cursor_start_raster /= 2;
+    cursor_end_raster /= 2;
   } else {
     num_lines += 1;
   }
@@ -1826,6 +1857,12 @@ video_render_full_frame(struct video_struct* p_video) {
       for (i_cols = 0; i_cols < num_cols; ++i_cols) {
         uint8_t data;
         crtc_line_address &= 0x3FFF;
+        if (cursor_active &&
+            (crtc_line_address == cursor_match_addr) &&
+            (i_lines >= cursor_start_raster) &&
+            (i_lines <= cursor_end_raster)) {
+          render_cursor(p_render);
+        }
         data = video_read_data_byte(p_video,
                                     0,
                                     crtc_line_address,

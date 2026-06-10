@@ -6,9 +6,13 @@
  *   Core 0: BBC CPU (runs inline — the "thread" is just a stored function)
  *   Core 1: HDMI audio (frank_hdmi_run_core1 or I2S render loop)
  *
- * os_thread_create() stores the BBC CPU function pointer but does NOT
- * launch Core 1.  After bbc_run_async() returns, main.c calls
- * micro_run_bbc_cpu() to execute the BBC CPU loop directly on Core 0.
+ * bbc_run_async() calls os_thread_create() TWICE:
+ *   1. bbc_cpu_thread    ← this is the BBC CPU — we must run this one
+ *   2. sound_play_thread ← spawned by sound_start_playing() — IGNORE on Pico
+ *                          (sound is pushed to HDMI ring by os_sound_pico.c)
+ *
+ * We keep only the FIRST registration.  After bbc_run_async() returns,
+ * main.c calls micro_run_bbc_cpu() to execute the BBC CPU loop on Core 0.
  */
 #include "os_thread.h"
 #include <stdlib.h>
@@ -20,11 +24,17 @@ struct os_thread_struct {
 };
 
 static struct os_thread_struct g_bbc_thread;
+static int g_bbc_thread_set = 0;
 
 struct os_thread_struct* os_thread_create(void* p_func, void* p_arg) {
-    /* Store but do NOT launch — BBC CPU runs on Core 0 inline. */
-    g_bbc_thread.p_func = (void* (*)(void*))p_func;
-    g_bbc_thread.p_arg  = p_arg;
+    if (!g_bbc_thread_set) {
+        /* First registration = BBC CPU thread. */
+        g_bbc_thread.p_func = (void* (*)(void*))p_func;
+        g_bbc_thread.p_arg  = p_arg;
+        g_bbc_thread_set    = 1;
+    }
+    /* Subsequent registrations (sound_play_thread etc.) are silently ignored.
+     * Sound output is handled by os_sound_pico.c → HDMI ring buffer. */
     return &g_bbc_thread;
 }
 

@@ -18,11 +18,17 @@
 #include "micro_keys.h"
 #include "ff.h"
 #include "pico/stdlib.h"
+#include "pico/time.h"
 #include "hardware/watchdog.h"
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
 #include <ctype.h>
+
+#include "bbc.h"
+#include "video.h"
+
+extern struct bbc_struct* g_p_bbc;
 
 #define CMD_BUF_SIZE 256
 
@@ -118,6 +124,50 @@ static void process_command(char* cmd) {
     } else if ((r = match_prefix(cmd, "BREAK"))) {
         micro_key_break(0);
         printf("OK BREAK\n");
+    } else if ((r = match_prefix(cmd, "SPEED"))) {
+        if (!g_p_bbc) { printf("ERR BBC not running\n"); return; }
+        struct video_struct* p_video = bbc_get_video(g_p_bbc);
+        static uint64_t s_t0 = 0;
+        static uint64_t s_v0 = 0;
+        static uint64_t s_c0 = 0;
+        uint64_t t1 = time_us_64();
+        uint64_t v1 = video_get_num_vsyncs(p_video);
+        uint64_t c1 = video_get_num_crtc_advances(p_video);
+        if (s_t0 == 0 || t1 - s_t0 < 200000) {
+            s_t0 = t1; s_v0 = v1; s_c0 = c1;
+            printf("OK SPEED measuring... (send SPEED again in >=2s)\n");
+        } else {
+            uint32_t vsyncs  = (uint32_t)(v1 - s_v0);
+            uint32_t crtc    = (uint32_t)(c1 - s_c0);
+            uint32_t elapsed = (uint32_t)((t1 - s_t0) / 1000);
+            /* BBC target: 2,000,000 crtc advances/sec for 1MHz video.
+             * Actual speed = actual_crtc_rate / 2,000,000 * 100% */
+            uint32_t crtc_rate = (elapsed > 0) ? (crtc * 1000 / elapsed) : 0;
+            uint32_t pct = crtc_rate / 20000;  /* 2M/s = 100% */
+            uint32_t expected_v = (elapsed * 50) / 1000;
+            printf("OK SPEED elapsed=%lums vsyncs=%lu/%lu crtc/s=%lu speed=%lu%%\n",
+                   (unsigned long)elapsed, (unsigned long)vsyncs,
+                   (unsigned long)expected_v, (unsigned long)crtc_rate,
+                   (unsigned long)pct);
+            /* Emulation-only timing: distinguish a pacing defect (Case A,
+             * emul work fits in the 2ms budget) from a too-slow interpreter
+             * (Case B, emul work exceeds the budget). Each callback runs
+             * cycles_per_run_normal cycles = ~2000us of BBC time. */
+            uint64_t emul_us = 0, sleep_us = 0;
+            uint32_t cb = 0;
+            bbc_get_perf_emul(g_p_bbc, &emul_us, &sleep_us, &cb);
+            if (cb > 0) {
+                uint32_t emul_per = (uint32_t)(emul_us / cb);
+                uint32_t sleep_per = (uint32_t)(sleep_us / cb);
+                const char* cse = (emul_per <= 2000) ? "A(pacing)"
+                                                     : "B(emulation)";
+                printf("OK PERF callbacks=%lu emul_us/cb=%lu sleep_us/cb=%lu "
+                       "budget_us=2000 case=%s\n",
+                       (unsigned long)cb, (unsigned long)emul_per,
+                       (unsigned long)sleep_per, cse);
+            }
+            s_t0 = t1; s_v0 = v1; s_c0 = c1;
+        }
     } else if ((r = match_prefix(cmd, "RESETCFG"))) {
         /* Restore default settings (Model B) and reboot. */
         micro_settings_defaults();

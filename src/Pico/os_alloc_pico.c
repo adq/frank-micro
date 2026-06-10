@@ -41,14 +41,11 @@ void os_alloc_free_aligned(void* p) {
 
 /* Memory handles */
 intptr_t os_alloc_get_memory_handle(size_t size) {
-    /* Route large allocations to PSRAM to preserve SRAM for small objects. */
-    void* p = NULL;
-    if (size >= 16384 && psram_is_available()) {
-        p = psram_malloc(size);
-    }
-    if (!p) {
-        p = malloc(size);
-    }
+    /* The memory handle IS the BBC 6502 address space (p_mem_raw, p_mem_read,
+     * p_mem_write).  The interpreter accesses it on EVERY CPU instruction, so
+     * it MUST live in fast SRAM — never in PSRAM (XIP latency kills emulation
+     * speed).  Always use the SRAM heap here. */
+    void* p = malloc(size);
     if (!p) return (intptr_t)-1;
     memset(p, 0, size);
     return (intptr_t)p;

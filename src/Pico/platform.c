@@ -96,18 +96,11 @@ void micro_frame_present(void) {
     graphics_set_buffer(fb);
     current_buffer ^= 1u;
 
-    /* Limit to 50 Hz if setting is on */
-    if (g_micro_settings.limit_speed) {
-        uint64_t now = time_us_64();
-        if (g_next_frame_us == 0) g_next_frame_us = now;
-        g_next_frame_us += FRAME_PERIOD_US;
-        if (g_next_frame_us > now) {
-            sleep_us(g_next_frame_us - now);
-        } else {
-            /* Fell behind — skip throttle */
-            g_next_frame_us = now;
-        }
-    }
+    /* Speed limiting is handled by bbc_do_sleep() inside the BBC timing loop
+     * (bbc_cycles_timer_callback, 500Hz).  Do NOT sleep here — this function
+     * runs inside the BBC callback chain and any sleep here would interfere
+     * with bbc_do_sleep's pacing, causing double-sleeping and apparent
+     * ~28% speed (20ms BBC sleep + 20ms micro_frame_present sleep per frame). */
 
     /* Serial console */
     micro_serial_poll();

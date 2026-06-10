@@ -130,6 +130,10 @@ void bbc_get_address_details(struct bbc_struct* p_bbc,
 
 int bbc_get_run_flag(struct bbc_struct* p_bbc);
 int bbc_get_print_flag(struct bbc_struct* p_bbc);
+void bbc_get_perf_emul(struct bbc_struct* p_bbc,
+                       uint64_t* p_emul_us,
+                       uint64_t* p_sleep_us,
+                       uint32_t* p_count);
 
 int bbc_get_fast_flag(struct bbc_struct* p_bbc);
 void bbc_set_fast_flag(struct bbc_struct* p_bbc, int is_fast);
