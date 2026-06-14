@@ -22,14 +22,6 @@
 
 bool x_gui_audio_init_failed;
 
-/* Producer-side diagnostics (mono samples produced / dropped on ring-full). */
-volatile uint32_t frank_audio_produced = 0;
-volatile uint32_t frank_audio_dropped  = 0;
-volatile uint32_t frank_audio_rate_hz  = 0;
-volatile uint32_t frank_audio_maxrun   = 0;  /* longest identical-sample run */
-volatile uint32_t frank_audio_gaps     = 0;  /* runs >= 300 samples (~10ms)  */
-volatile int32_t  frank_audio_gapval   = 0;  /* sample value of last gap     */
-
 /* A small mono sample buffer reused each fill (b-em uses one in flight). */
 #define FRANK_AUDIO_SAMPLES 882   /* 1 frame @ ~44.1kHz / 50Hz */
 static int16_t s_mono[FRANK_AUDIO_SAMPLES];
@@ -49,7 +41,6 @@ static struct audio_buffer_pool s_pool;
 
 struct audio_buffer_pool *x_gui_audio_init(uint freq) {
     s_fmt.sample_freq = freq;
-    frank_audio_rate_hz = freq;
     s_fmt.format = AUDIO_BUFFER_FORMAT_PCM_S16;
     s_fmt.channel_count = 1;
     x_gui_audio_init_failed = false;
@@ -62,54 +53,45 @@ struct audio_buffer *take_audio_buffer(struct audio_buffer_pool *ac, bool block)
 }
 
 /*
- * Push b-em's mono audio into the HDMI ring, up-mixed to stereo.  We write
- * exactly what the emulation produces (no rate-altering padding — that would
- * push the ring toward overflow and cause periodic dropped-sample glitches).
- * Transient producer stalls (e.g. a synchronous SD sector read on core 0) are
- * absorbed by the deep ring and masked by the consumer's DC-hold on underflow
- * (see set_audio_sample() in frank_data_packet.c).
+ * Push b-em's audio into the HDMI ring, resampled from the BBC's native
+ * 31250 Hz (the sn76489 output rate, FREQ_SO) to the HDMI ring's standard
+ * 32000 Hz, and up-mixed mono -> stereo.
+ *
+ * The HDMI audio data-island stream advertises a STANDARD CEA-861 rate
+ * (32000 Hz) so real HDMI sinks lock their audio clock to our Clock-
+ * Regeneration packet.  A non-standard rate (31250 Hz) is mishandled by
+ * many sinks, which then drop a sample every few seconds.
+ *
+ * The ratio 31250/32000 = 0.9765625 = 64000/65536 exactly, so the linear
+ * resampler below is exact fixed-point: one output sample advances the input
+ * phase by 64000 in 16.16, emitting 1.024 output samples per input sample.
  */
+#define RESAMP_STEP   64000u   /* (31250/32000) << 16, exact */
+#define RESAMP_ONE    0x10000u
+
 void give_audio_buffer(struct audio_buffer_pool *ac, struct audio_buffer *buffer) {
 #if defined(HDMI_PIO_AUDIO)
     const int16_t *src = (const int16_t *)buffer->buffer->bytes;
     uint32_t n = buffer->sample_count;
-    static int16_t stereo[256];
 
-    frank_audio_produced += n;
-    /* Gap detector: track the longest run of identical consecutive samples in
-     * the data b-em hands us.  Real BBC audio never holds a value for long; a
-     * long flat run means the producer emitted silence/DC (an audible stop)
-     * — independent of any capture device.  frank_audio_maxrun is the longest
-     * run seen since the PERF reader last cleared it. */
-    {
-        static int16_t prev = 0;
-        static uint32_t run = 0;
-        for (uint32_t k = 0; k < n; k++) {
-            int16_t s = src[k];
-            if (s == prev) {
-                run++;
-                if (run > frank_audio_maxrun) frank_audio_maxrun = run;
-                if (run == 300) {            /* crossed the gap threshold */
-                    frank_audio_gaps++;
-                    frank_audio_gapval = s;
-                }
-            } else {
-                run = 1; prev = s;
-            }
+    static uint32_t mu   = 0;   /* 16.16 phase between prev and cur input  */
+    static int16_t  prev = 0;   /* previous input sample (persists)        */
+    static int16_t  stereo[256];
+    uint32_t sc = 0;            /* stereo frames buffered for flush         */
+
+    for (uint32_t i = 0; i < n; i++) {
+        int16_t cur = src[i];
+        while (mu < RESAMP_ONE) {
+            int32_t out = prev + (((int32_t)(cur - prev) * (int32_t)mu) >> 16);
+            stereo[sc * 2]     = (int16_t)out;
+            stereo[sc * 2 + 1] = (int16_t)out;
+            if (++sc == 128) { frank_hdmi_audio_write(stereo, 128); sc = 0; }
+            mu += RESAMP_STEP;
         }
+        mu -= RESAMP_ONE;
+        prev = cur;
     }
-    uint32_t i = 0;
-    while (i < n) {
-        uint32_t chunk = n - i;
-        if (chunk > 128) chunk = 128;
-        for (uint32_t j = 0; j < chunk; j++) {
-            int16_t s = src[i + j];
-            stereo[j * 2] = stereo[j * 2 + 1] = s;
-        }
-        uint32_t wrote = frank_hdmi_audio_write(stereo, chunk);
-        frank_audio_dropped += (chunk - wrote);
-        i += chunk;
-    }
+    if (sc) frank_hdmi_audio_write(stereo, sc);
 #else
     (void)buffer;
 #endif

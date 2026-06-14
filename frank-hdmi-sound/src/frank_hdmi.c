@@ -105,21 +105,13 @@ static const struct dvi_serialiser_cfg frank_dvi_cfg = {
 #define N_SCANLINE_BUFS     2
 
 /*
- * HDMI audio Clock-Regeneration N value.  The sink rebuilds the audio
- * clock from  128*fs = f_pixel * N / CTS , so CTS = f_pixel*N/(128*fs)
- * must come out (very near) an integer or the regenerated clock drifts
- * from our actual sample-delivery rate and the sink periodically drops
- * or repeats a sample (an audible "stop" every few seconds).
- *
- * For this board (f_pixel = 25.2 MHz, fs = 31250 Hz) N = 4000 yields
- * CTS = 25200 EXACTLY (0 ppm error).  The CEA-861 value 4096 (for
- * 32 kHz) gives CTS = 25804.8 — non-integer — and the old truncating
- * integer divide rounded it to 25846, regenerating ~31201 Hz: a
- * ~1570 ppm mismatch that overflowed the sink's audio FIFO and dropped
- * a chunk every 2-3 seconds.  4000 is within the CEA-861 allowed N
- * range (128*fs/1500 .. 128*fs/300 = 2667 .. 13333) for fs = 31250.
+ * HDMI audio Clock-Regeneration N value.  CEA-861 value for 32 kHz.
+ * For this board (f_pixel = 25.2 MHz, fs = 32000 Hz) it gives
+ * CTS = f_pixel*N/(128*fs) = 25200 exactly (0 ppm), so the sink's audio
+ * clock locks cleanly.  (frank-micro feeds 32000 Hz, resampled from the
+ * BBC's native 31250 Hz in the producer bridge.)
  */
-#define HDMI_AUDIO_N        4000
+#define HDMI_AUDIO_N        4096
 
 /* Power-of-two size for the data-island ring.  Producers typically
  * push in bursts of one chunk per video frame; the ring needs to

@@ -115,9 +115,13 @@ if(HDMI_DRIVER STREQUAL "HDMI_PIO_AUDIO")
     endif()
     add_subdirectory(frank-hdmi-sound/src)
 
-    # BBC SN76489 emulation produces samples at 2 MHz / 64 = 31250 Hz; match the
-    # HDMI audio clock so the ring fill/drain rates align (no pitch shift/drift).
-    target_compile_definitions(frank_hdmi_sound INTERFACE FRANK_HDMI_AUDIO_RATE=31250)
+    # Use the STANDARD 32000 Hz HDMI audio rate (CEA-861).  Non-standard rates
+    # such as the BBC SN76489's native 31250 Hz are mishandled by real HDMI
+    # sinks (their audio clock does not lock to our Clock-Regeneration, so they
+    # drop a sample every few seconds).  b-em produces at 31250 Hz and the
+    # producer bridge (frank_audio.c) resamples to 32000 Hz.  For 32000 Hz the
+    # default N=4096 gives CTS=25200 exactly.  (Matches the working frank-cpc.)
+    target_compile_definitions(frank_hdmi_sound INTERFACE FRANK_HDMI_AUDIO_RATE=32000)
 
     add_library(drivers
         drivers/HDMI_audio.c
