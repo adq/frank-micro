@@ -52,23 +52,52 @@ struct audio_buffer *take_audio_buffer(struct audio_buffer_pool *ac, bool block)
     return &s_buf;
 }
 
+/*
+ * The BBC emulation (producer) and the HDMI audio clock (consumer) run on
+ * independent timebases, and disc access on core0 (PoP streams rooms from the
+ * SD card) briefly pauses audio production.  To avoid audible dropouts we keep
+ * the ring near a small target fill: after writing each buffer, if the ring
+ * has drained below the low-water mark we top it up by repeating the last
+ * sample.  A repeated sample across a transient stall is far less audible than
+ * a multi-millisecond gap, and latency stays low (~TARGET/31250 ≈ 49 ms).
+ */
+#define FRANK_RING_FRAMES   4096u
+#define FRANK_TARGET_FILL   1536u   /* ~49 ms */
+#define FRANK_LOW_WATER      768u   /* ~25 ms */
+
 void give_audio_buffer(struct audio_buffer_pool *ac, struct audio_buffer *buffer) {
 #if defined(HDMI_PIO_AUDIO)
     const int16_t *src = (const int16_t *)buffer->buffer->bytes;
     uint32_t n = buffer->sample_count;
-    /* Up-mix mono -> interleaved stereo in small chunks. */
+    static int16_t last_sample = 0;
     static int16_t stereo[256];
+
+    /* Up-mix mono -> interleaved stereo and push in small chunks. */
     uint32_t i = 0;
     while (i < n) {
         uint32_t chunk = n - i;
         if (chunk > 128) chunk = 128;
         for (uint32_t j = 0; j < chunk; j++) {
             int16_t s = src[i + j];
-            stereo[j * 2]     = s;
-            stereo[j * 2 + 1] = s;
+            stereo[j * 2] = stereo[j * 2 + 1] = s;
         }
         frank_hdmi_audio_write(stereo, chunk);
         i += chunk;
+    }
+    if (n) last_sample = src[n - 1];
+
+    /* Adaptive fill control: top up the ring if it has drained too low. */
+    uint32_t fill = FRANK_RING_FRAMES - frank_hdmi_audio_free();
+    if (fill < FRANK_LOW_WATER) {
+        uint32_t pad = FRANK_TARGET_FILL - fill;
+        for (uint32_t j = 0; j < 128; j++)
+            stereo[j * 2] = stereo[j * 2 + 1] = last_sample;
+        while (pad) {
+            uint32_t chunk = pad > 128 ? 128 : pad;
+            uint32_t wrote = frank_hdmi_audio_write(stereo, chunk);
+            if (wrote == 0) break;
+            pad -= wrote;
+        }
     }
 #else
     (void)buffer;

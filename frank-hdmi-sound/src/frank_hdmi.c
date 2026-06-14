@@ -109,9 +109,13 @@ static const struct dvi_serialiser_cfg frank_dvi_cfg = {
 
 /* Power-of-two size for the data-island ring.  Producers typically
  * push in bursts of one chunk per video frame; the ring needs to
- * absorb at least one chunk plus a couple of catch-up bursts.  2048
- * frames = 8 KB and ~64 ms of buffering. */
-#define AUDIO_RING_FRAMES   2048
+ * absorb at least one chunk plus a couple of catch-up bursts.  It is
+ * primed half-full, so the usable drain headroom (the cushion against
+ * a producer that stalls mid-frame) is AUDIO_RING_FRAMES/2 samples.
+ * 4096 frames = 16 KB ≈ 131 ms total / 65 ms drain headroom @ 31.25 kHz. */
+#ifndef AUDIO_RING_FRAMES
+#define AUDIO_RING_FRAMES   4096
+#endif
 
 /* ------------------------------------------------------------------ */
 /* libdvi state and buffers                                           */
