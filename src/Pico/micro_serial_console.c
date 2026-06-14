@@ -27,6 +27,13 @@
 
 #include "bbc.h"
 #include "video.h"
+#include "render.h"
+#include "state_6502.h"
+#include "wd_fdc.h"
+#include "interp.h"
+#include "disc.h"
+#include "disc_drive.h"
+#include "util.h"
 
 extern struct bbc_struct* g_p_bbc;
 
@@ -217,6 +224,125 @@ static void process_command(char* cmd) {
         strncpy(g_micro_disk_dir, r, MICRO_DISK_PATH_LEN - 1);
         micro_disk_rescan();
         printf("OK DIR=%s ENTRIES=%d\n", g_micro_disk_dir, g_micro_disk_entry_count);
+    } else if ((r = match_prefix(cmd, "RPERF"))) {
+        extern void pico_render_perf_get(uint32_t*, uint32_t*, uint64_t*, uint64_t*);
+        extern void pico_render_perf_reset(void);
+        uint32_t vs, rc; uint64_t rus, pus;
+        pico_render_perf_get(&vs, &rc, &rus, &pus);
+        uint32_t rper = rc ? (uint32_t)(rus / rc) : 0;
+        uint32_t pper = vs ? (uint32_t)(pus / vs) : 0;
+        printf("OK RPERF vsyncs=%lu renders=%lu render_us/frame=%lu "
+               "present_us/frame=%lu\n",
+               (unsigned long)vs, (unsigned long)rc,
+               (unsigned long)rper, (unsigned long)pper);
+        pico_render_perf_reset();
+    } else if ((r = match_prefix(cmd, "PALDUMP"))) {
+        if (!g_p_bbc) { printf("ERR BBC not running\n"); return; }
+        struct video_struct* pv = bbc_get_video(g_p_bbc);
+        render_debug_dump_lut(video_get_render(pv));
+        video_debug_dump_crtc(pv);
+        video_pal_log_dump(pv);
+    } else if ((r = match_prefix(cmd, "CPU"))) {
+        if (!g_p_bbc) { printf("ERR BBC not running\n"); return; }
+        struct state_6502* p_s = bbc_get_6502(g_p_bbc);
+        /* Sample the 6502 PC several times across emulation steps so a tight
+         * wait-loop shows up as a small clustered address range. */
+        printf("OK CPU");
+        for (int i = 0; i < 8; i++) {
+            printf(" %04lX", (unsigned long)(p_s->abi_state.reg_pc & 0xFFFF));
+            busy_wait_us(300);
+        }
+        printf(" A=%02lX X=%02lX Y=%02lX S=%02lX P=%02lX irq=%lu\n",
+               (unsigned long)(p_s->abi_state.reg_a & 0xFF),
+               (unsigned long)(p_s->abi_state.reg_x & 0xFF),
+               (unsigned long)(p_s->abi_state.reg_y & 0xFF),
+               (unsigned long)(p_s->abi_state.reg_s & 0xFF),
+               (unsigned long)(p_s->abi_state.reg_flags & 0xFF),
+               (unsigned long)p_s->abi_state.irq_fire);
+    } else if ((r = match_prefix(cmd, "FDCLOG "))) {
+        if (!g_p_bbc) { printf("ERR BBC not running\n"); return; }
+        while (*r == ' ') r++;
+        int on = match_prefix(r, "ON") ? 1 : 0;
+        wd_fdc_set_log_commands(bbc_get_wd_fdc(g_p_bbc), on);
+        printf("OK FDCLOG %s\n", on ? "ON" : "OFF");
+    } else if ((r = match_prefix(cmd, "FDC"))) {
+        if (!g_p_bbc) { printf("ERR BBC not running\n"); return; }
+        uint8_t st, tr, se, cm; uint32_t state;
+        wd_fdc_get_diag(bbc_get_wd_fdc(g_p_bbc), &st, &tr, &se, &cm, &state);
+        printf("OK FDC status=%02X track=%u sector=%u command=%02X state=%lu overruns=%lu\n",
+               st, tr, se, cm, (unsigned long)state,
+               (unsigned long)wd_fdc_get_read_overruns(bbc_get_wd_fdc(g_p_bbc)));
+    } else if ((r = match_prefix(cmd, "MEM "))) {
+        if (!g_p_bbc) { printf("ERR BBC not running\n"); return; }
+        while (*r == ' ') r++;
+        unsigned addr = (unsigned)strtoul(r, NULL, 16);
+        uint8_t* mem = bbc_get_mem_read(g_p_bbc);
+        printf("OK MEM %04X:", addr & 0xFFFF);
+        for (int i = 0; i < 24; i++) printf(" %02X", mem[(addr + i) & 0xFFFF]);
+        printf("\n");
+    } else if ((r = match_prefix(cmd, "PCARM"))) {
+        while (*r == ' ') r++;
+        unsigned trig = *r ? (unsigned)strtoul(r, NULL, 16) : 0x1BE4;
+        interp_pcring_arm((uint16_t)trig);
+        printf("OK PCARM trigger=%04X\n", trig & 0xFFFF);
+    } else if ((r = match_prefix(cmd, "WATCHV"))) {
+        while (*r == ' ') r++;
+        unsigned wa = (unsigned)strtoul(r, (char**)&r, 16);
+        while (*r == ' ') r++;
+        int wv = *r ? (int)strtoul(r, NULL, 16) : 0;
+        interp_watch_arm_val((uint16_t)wa, wv);
+        printf("OK WATCHV addr=%04X val=%02X\n", wa & 0xFFFF, wv & 0xFF);
+    } else if ((r = match_prefix(cmd, "WATCH"))) {
+        while (*r == ' ') r++;
+        unsigned wa = *r ? (unsigned)strtoul(r, NULL, 16) : 0x2A22;
+        interp_watch_arm((uint16_t)wa);
+        printf("OK WATCH addr=%04X\n", wa & 0xFFFF);
+    } else if ((r = match_prefix(cmd, "PCDUMP"))) {
+        static uint16_t ring[256];
+        int n = interp_pcring_dump(ring, 256);
+        printf("OK PCDUMP trapped=%d n=%d:", interp_pcring_trapped(), n);
+        for (int i = 0; i < n; i++) printf(" %04X", ring[i]);
+        printf("\n");
+    } else if ((r = match_prefix(cmd, "DISCINFO"))) {
+        if (!g_p_bbc) { printf("ERR BBC not running\n"); return; }
+        struct disc_drive_struct* pd = bbc_get_drive_0(g_p_bbc);
+        struct disc_struct* pdisc = pd ? disc_drive_get_disc(pd) : NULL;
+        if (!pdisc) { printf("ERR no disc\n"); return; }
+        struct util_file* pf = disc_get_file(pdisc);
+        unsigned long sz = pf ? (unsigned long)util_file_get_size(pf) : 0;
+        printf("OK DISCINFO file_size=%lu tracks_data=%lu (bytes/track=2560)\n",
+               sz, sz / 2560);
+    } else if ((r = match_prefix(cmd, "TRAPMEM"))) {
+        while (*r == ' ') r++;
+        unsigned ta = *r ? (unsigned)strtoul(r, NULL, 16) : 0xDC50;
+        interp_trap_mem_set_addr((uint16_t)ta);
+        printf("OK TRAPMEM addr=%04X\n", ta & 0xFFFF);
+    } else if ((r = match_prefix(cmd, "TRAP"))) {
+        uint8_t rg[8]; uint8_t stk[64]; uint8_t tm[64];
+        int valid = interp_trap_regs(rg);
+        interp_trap_stack(stk);
+        interp_trap_mem(tm);
+        printf("OK TRAP valid=%d A=%02X X=%02X Y=%02X S=%02X P=%02X PC=%04X\n",
+               valid, rg[0], rg[1], rg[2], rg[3], rg[4], rg[5] | (rg[6] << 8));
+        printf("  stack 01C0:");
+        for (int i = 0; i < 64; i++) {
+            if (i == 32) printf("\n  stack 01E0:");
+            printf(" %02X", stk[i]);
+        }
+        printf("\n  trapmem:");
+        for (int i = 0; i < 64; i++) printf(" %02X", tm[i]);
+        printf("\n");
+    } else if ((r = match_prefix(cmd, "BBCST"))) {
+        if (!g_p_bbc) { printf("ERR BBC not running\n"); return; }
+        uint8_t* hz = bbc_get_hazel(g_p_bbc);
+        uint8_t* rd = bbc_get_mem_read(g_p_bbc);
+        printf("OK BBCST romsel=%02X acccon=%02X\n",
+               bbc_get_romsel(g_p_bbc), bbc_get_acccon(g_p_bbc));
+        printf("  read $DC50:");
+        for (int i = 0; i < 64; i++) printf(" %02X", rd[(0xDC50 + i) & 0xFFFF]);
+        printf("\n  hazel+1C50:");  /* $DC50 - $C000 = $1C50 */
+        for (int i = 0; i < 64; i++) printf(" %02X", hz[0x1C50 + i]);
+        printf("\n");
     } else if ((r = match_prefix(cmd, "HELP"))) {
         printf("OK Commands: PING RESET STATUS DISK A|B INSERT|EJECT|STATUS "
                "CAT CD TYPE RUN KEY BOOT BREAK MODEL AUTODISK HELP\n");

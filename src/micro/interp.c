@@ -13,6 +13,98 @@
 #include <assert.h>
 #include <stdint.h>
 
+/* Diagnostic 6502 PC ring buffer: captures the last N instruction PCs leading
+ * up to a trigger address, then freezes. Used to root-cause the POP cut-scene
+ * BRA* halt by revealing the control-flow path into the deliberate halt. */
+#define K_PCRING_SIZE 256
+volatile uint16_t g_pcring[K_PCRING_SIZE];
+volatile unsigned g_pcring_idx = 0;
+volatile int g_pcring_arm = 0;
+volatile int g_pcring_trapped = 0;
+volatile uint16_t g_pcring_trigger = 0x1BE4;
+volatile uint8_t g_trap_regs[8];     /* a,x,y,s,flags,pcl,pch,valid */
+volatile uint8_t g_trap_stack[64];   /* $01C0..$01FF snapshot at trap */
+volatile uint8_t g_trap_mem[64];     /* g_trap_mem_addr..+63 (CPU view) at trap */
+volatile uint16_t g_trap_mem_addr = 0xDC50;
+
+/* Write-watchpoint: freeze the PC ring on the first 6502 write to g_watch_addr.
+ * The last PC-ring entry is then the instruction that performed the write. */
+volatile uint16_t g_watch_addr = 0;
+volatile int g_watch_arm = 0;
+volatile int g_watch_val = -1;   /* -1 = match any value; else only that byte */
+
+void
+interp_pcring_arm(uint16_t trigger) {
+  g_pcring_trigger = trigger;
+  g_pcring_idx = 0;
+  g_pcring_trapped = 0;
+  g_trap_regs[7] = 0;
+  g_watch_arm = 0;
+  g_pcring_arm = 1;
+}
+
+void
+interp_watch_arm(uint16_t addr) {
+  g_watch_addr = addr;
+  g_watch_val = -1;
+  g_pcring_idx = 0;
+  g_pcring_trapped = 0;
+  g_trap_regs[7] = 0;
+  g_pcring_arm = 1;
+  g_watch_arm = 1;
+}
+
+void
+interp_watch_arm_val(uint16_t addr, int val) {
+  interp_watch_arm(addr);
+  g_watch_val = val;
+}
+
+int
+interp_trap_regs(uint8_t* p_out8) {
+  int i;
+  for (i = 0; i < 8; ++i) p_out8[i] = g_trap_regs[i];
+  return g_trap_regs[7];
+}
+
+void
+interp_trap_stack(uint8_t* p_out64) {
+  int i;
+  for (i = 0; i < 64; ++i) p_out64[i] = g_trap_stack[i];
+}
+
+void
+interp_trap_mem(uint8_t* p_out64) {
+  int i;
+  for (i = 0; i < 64; ++i) p_out64[i] = g_trap_mem[i];
+}
+
+void
+interp_trap_mem_set_addr(uint16_t addr) {
+  g_trap_mem_addr = addr;
+}
+
+int
+interp_pcring_dump(uint16_t* p_out, int max) {
+  int n = 0;
+  unsigned i;
+  unsigned start = g_pcring_idx;
+  if (start > (unsigned) max) {
+    start = g_pcring_idx - (unsigned) max;
+  } else {
+    start = 0;
+  }
+  for (i = start; i < g_pcring_idx && n < max; ++i) {
+    p_out[n++] = g_pcring[i & (K_PCRING_SIZE - 1)];
+  }
+  return n;
+}
+
+int
+interp_pcring_trapped(void) {
+  return g_pcring_trapped;
+}
+
 enum {
   k_interp_special_debug = 1,
   k_interp_special_callback = 2,
@@ -22,6 +114,35 @@ enum {
   k_interp_special_memory_written_callback = 32,
   k_interp_special_KIL = 64,
 };
+
+#define INTERP_TRAP_SNAPSHOT()                                            \
+  do {                                                                    \
+    if (!g_trap_regs[7]) {                                               \
+      int _i;                                                            \
+      g_trap_regs[0] = a; g_trap_regs[1] = x; g_trap_regs[2] = y;        \
+      g_trap_regs[3] = s;                                                \
+      g_trap_regs[4] = interp_get_flags(zf, nf, cf, of, df, intf);       \
+      g_trap_regs[5] = (pc & 0xFF); g_trap_regs[6] = (pc >> 8);          \
+      for (_i = 0; _i < 64; ++_i) {                                      \
+        g_trap_stack[_i] = p_mem_read[0x01C0 + _i];                      \
+      }                                                                  \
+      for (_i = 0; _i < 64; ++_i) {                                      \
+        g_trap_mem[_i] =                                                 \
+            p_mem_read[(uint16_t) (g_trap_mem_addr + _i)];               \
+      }                                                                  \
+      g_trap_regs[7] = 1;                                                \
+    }                                                                    \
+  } while (0)
+
+#define INTERP_WATCH_CHECK(A)                                             \
+  do {                                                                    \
+    if (g_watch_arm && !g_pcring_trapped &&                              \
+        (uint16_t) (A) == g_watch_addr &&                                \
+        (g_watch_val < 0 || (int) v == g_watch_val)) {                   \
+      INTERP_TRAP_SNAPSHOT();                                            \
+      g_pcring_trapped = 1;                                              \
+    }                                                                    \
+  } while (0)
 
 struct interp_struct {
   struct cpu_driver driver;
@@ -250,6 +371,7 @@ interp_check_log_bcd(struct interp_struct* p_interp) {
   countdown = timing_get_countdown(p_timing);
 
 #define INTERP_MEMORY_WRITE(addr_write)                                       \
+  INTERP_WATCH_CHECK(addr_write);                                             \
   if (memory_write_callback(p_memory_obj, addr_write, v, pc, 0) != 0) {       \
     write_callback_from =                                                     \
         p_memory_access->memory_write_needs_callback_from(p_memory_obj);      \
@@ -260,6 +382,7 @@ interp_check_log_bcd(struct interp_struct* p_interp) {
   countdown = timing_get_countdown(p_timing);
 
 #define INTERP_MEMORY_WRITE_POLL_IRQ(addr_write)                              \
+  INTERP_WATCH_CHECK(addr_write);                                             \
   p_interp->callback_intf = intf;                                             \
   assert((p_interp->callback_do_irq = -1) == -1);                             \
   if (memory_write_callback(p_memory_obj, addr_write, v, pc, 1) != 0) {       \
@@ -315,7 +438,7 @@ interp_check_log_bcd(struct interp_struct* p_interp) {
   pc += 3;                                                                    \
   if (addr < write_callback_from) {                                           \
     INSTR;                                                                    \
-    p_mem_write[addr] = v;                                                    \
+    INTERP_WATCH_CHECK(addr); p_mem_write[addr] = v;                                                    \
     cycles_this_instruction = 4;                                              \
   } else {                                                                    \
     INTERP_TIMING_ADVANCE(2);                                                 \
@@ -334,7 +457,7 @@ interp_check_log_bcd(struct interp_struct* p_interp) {
   if (addr < write_callback_from) {                                           \
     v = p_mem_read[addr];                                                     \
     INSTR;                                                                    \
-    p_mem_write[addr] = v;                                                    \
+    INTERP_WATCH_CHECK(addr); p_mem_write[addr] = v;                                                    \
     cycles_this_instruction = 6;                                              \
   } else {                                                                    \
     INTERP_TIMING_ADVANCE(3);                                                 \
@@ -415,7 +538,7 @@ interp_check_log_bcd(struct interp_struct* p_interp) {
   pc += 3;                                                                    \
   if (addr < write_callback_from) {                                           \
     INSTR;                                                                    \
-    p_mem_write[addr] = v;                                                    \
+    INTERP_WATCH_CHECK(addr); p_mem_write[addr] = v;                                                    \
     cycles_this_instruction = 5;                                              \
   } else {                                                                    \
     if (is_65c12) {                                                           \
@@ -448,7 +571,7 @@ interp_check_log_bcd(struct interp_struct* p_interp) {
   pc += 3;                                                                    \
   if (addr < write_callback_from) {                                           \
     INSTR;                                                                    \
-    p_mem_write[addr] = v;                                                    \
+    INTERP_WATCH_CHECK(addr); p_mem_write[addr] = v;                                                    \
     cycles_this_instruction = 5;                                              \
   } else {                                                                    \
     page_crossing = !!((addr_temp >> 8) ^ (addr >> 8));                       \
@@ -458,7 +581,7 @@ interp_check_log_bcd(struct interp_struct* p_interp) {
     INSTR;                                                                    \
     if (page_crossing) {                                                      \
       addr &= 0x00FF;                                                         \
-      p_mem_write[addr] = v;                                                  \
+      INTERP_WATCH_CHECK(addr); p_mem_write[addr] = v;                                                  \
       INTERP_TIMING_ADVANCE(1);                                               \
     } else {                                                                  \
       INTERP_MEMORY_WRITE(addr);                                              \
@@ -475,7 +598,7 @@ interp_check_log_bcd(struct interp_struct* p_interp) {
   if (addr < write_callback_from) {                                           \
     v = p_mem_read[addr];                                                     \
     INSTR;                                                                    \
-    p_mem_write[addr] = v;                                                    \
+    INTERP_WATCH_CHECK(addr); p_mem_write[addr] = v;                                                    \
     cycles_this_instruction = 7;                                              \
   } else {                                                                    \
     if (is_65c12) {                                                           \
@@ -516,7 +639,7 @@ interp_check_log_bcd(struct interp_struct* p_interp) {
   if (addr < write_callback_from) {                                           \
     v = p_mem_read[addr];                                                     \
     INSTR;                                                                    \
-    p_mem_write[addr] = v;                                                    \
+    INTERP_WATCH_CHECK(addr); p_mem_write[addr] = v;                                                    \
     cycles_this_instruction = 6;                                              \
     cycles_this_instruction += page_crossing;                                 \
   } else {                                                                    \
@@ -575,7 +698,7 @@ interp_check_log_bcd(struct interp_struct* p_interp) {
   pc += 2;                                                                    \
   if (addr < write_callback_from) {                                           \
     INSTR;                                                                    \
-    p_mem_write[addr] = v;                                                    \
+    INTERP_WATCH_CHECK(addr); p_mem_write[addr] = v;                                                    \
     cycles_this_instruction = 6;                                              \
   } else {                                                                    \
     INTERP_TIMING_ADVANCE(4);                                                 \
@@ -595,7 +718,7 @@ interp_check_log_bcd(struct interp_struct* p_interp) {
   if (addr < write_callback_from) {                                           \
     v = p_mem_read[addr];                                                     \
     INSTR;                                                                    \
-    p_mem_write[addr] = v;                                                    \
+    INTERP_WATCH_CHECK(addr); p_mem_write[addr] = v;                                                    \
     cycles_this_instruction = 8;                                              \
   } else {                                                                    \
     INTERP_TIMING_ADVANCE(5);                                                 \
@@ -645,7 +768,7 @@ interp_check_log_bcd(struct interp_struct* p_interp) {
   pc += 2;                                                                    \
   if (addr < write_callback_from) {                                           \
     INSTR;                                                                    \
-    p_mem_write[addr] = v;                                                    \
+    INTERP_WATCH_CHECK(addr); p_mem_write[addr] = v;                                                    \
     cycles_this_instruction = 5;                                              \
   } else {                                                                    \
     INTERP_TIMING_ADVANCE(3);                                                 \
@@ -720,7 +843,7 @@ interp_check_log_bcd(struct interp_struct* p_interp) {
   pc += 2;                                                                    \
   if (addr < write_callback_from) {                                           \
     INSTR;                                                                    \
-    p_mem_write[addr] = v;                                                    \
+    INTERP_WATCH_CHECK(addr); p_mem_write[addr] = v;                                                    \
     cycles_this_instruction = 6;                                              \
   } else {                                                                    \
     if (is_65c12) {                                                           \
@@ -745,7 +868,7 @@ interp_check_log_bcd(struct interp_struct* p_interp) {
   pc += 2;                                                                    \
   if (addr < write_callback_from) {                                           \
     INSTR;                                                                    \
-    p_mem_write[addr] = v;                                                    \
+    INTERP_WATCH_CHECK(addr); p_mem_write[addr] = v;                                                    \
     cycles_this_instruction = 6;                                              \
   } else {                                                                    \
     page_crossing = !!((addr_temp >> 8) ^ (addr >> 8));                       \
@@ -755,7 +878,7 @@ interp_check_log_bcd(struct interp_struct* p_interp) {
     INSTR;                                                                    \
     if (page_crossing) {                                                      \
       addr &= 0x00FF;                                                         \
-      p_mem_write[addr] = v;                                                  \
+      INTERP_WATCH_CHECK(addr); p_mem_write[addr] = v;                                                  \
       INTERP_TIMING_ADVANCE(1);                                               \
     } else {                                                                  \
       INTERP_MEMORY_WRITE(addr);                                              \
@@ -772,7 +895,7 @@ interp_check_log_bcd(struct interp_struct* p_interp) {
   if (addr < write_callback_from) {                                           \
     v = p_mem_read[addr];                                                     \
     INSTR;                                                                    \
-    p_mem_write[addr] = v;                                                    \
+    INTERP_WATCH_CHECK(addr); p_mem_write[addr] = v;                                                    \
     cycles_this_instruction = 8;                                              \
   } else {                                                                    \
     addr_temp = ((addr & 0xFF) | (addr_temp & 0xFF00));                       \
@@ -797,14 +920,14 @@ interp_check_log_bcd(struct interp_struct* p_interp) {
   pc += 2;                                                                    \
   v = p_mem_read[addr];                                                       \
   INSTR;                                                                      \
-  p_mem_write[addr] = v;                                                      \
+  INTERP_WATCH_CHECK(addr); p_mem_write[addr] = v;                                                      \
   cycles_this_instruction = 5;
 
 #define INTERP_MODE_ZPG_WRITE(INSTR)                                          \
   addr = p_mem_read[(uint16_t) (pc + 1)];                                     \
   pc += 2;                                                                    \
   INSTR;                                                                      \
-  p_mem_write[addr] = v;                                                      \
+  INTERP_WATCH_CHECK(addr); p_mem_write[addr] = v;                                                      \
   cycles_this_instruction = 3;
 
 #define INTERP_MODE_ZPr_READ(INSTR, reg_name)                                 \
@@ -822,7 +945,7 @@ interp_check_log_bcd(struct interp_struct* p_interp) {
   addr += reg_name;                                                           \
   addr &= 0xFF;                                                               \
   INSTR;                                                                      \
-  p_mem_write[addr] = v;                                                      \
+  INTERP_WATCH_CHECK(addr); p_mem_write[addr] = v;                                                      \
   cycles_this_instruction = 4;
 
 #define INTERP_MODE_ZPX_READ_WRITE(INSTR)                                     \
@@ -832,7 +955,7 @@ interp_check_log_bcd(struct interp_struct* p_interp) {
   addr &= 0xFF;                                                               \
   v = p_mem_read[addr];                                                       \
   INSTR;                                                                      \
-  p_mem_write[addr] = v;                                                      \
+  INTERP_WATCH_CHECK(addr); p_mem_write[addr] = v;                                                      \
   cycles_this_instruction = 6;
 
 #define INTERP_LOAD_NZ_FLAGS(reg_name)                                        \
@@ -2856,6 +2979,13 @@ do_special_checks:
        * opcode without drama.
        */
       opcode = p_mem_read[pc];
+      if (g_pcring_arm && !g_pcring_trapped) {
+        g_pcring[g_pcring_idx++ & (K_PCRING_SIZE - 1)] = pc;
+        if (!g_watch_arm && pc == g_pcring_trigger) {
+          INTERP_TRAP_SNAPSHOT();
+          g_pcring_trapped = 1;
+        }
+      }
       continue;
     }
 
@@ -3020,6 +3150,13 @@ check_irq:
       opcode = p_mem_read[pc];
     }
 
+    if (g_pcring_arm && !g_pcring_trapped) {
+      g_pcring[g_pcring_idx++ & (K_PCRING_SIZE - 1)] = pc;
+      if (!g_watch_arm && pc == g_pcring_trigger) {
+        INTERP_TRAP_SNAPSHOT();
+          g_pcring_trapped = 1;
+      }
+    }
     /* The debug callout fires before the next instruction executes. */
     if (p_interp->debug_subsystem_active || *p_debug_interrupt) {
       INTERP_TIMING_ADVANCE(0);

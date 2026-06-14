@@ -17,6 +17,7 @@
 #include "os_thread.h"
 #include <stdlib.h>
 #include <stdint.h>
+#include "fpu_enable.h"
 
 struct os_thread_struct {
     void* (*p_func)(void*);
@@ -45,6 +46,12 @@ intptr_t os_thread_destroy(struct os_thread_struct* p_thread_struct) {
 
 /* Called from main.c after HDMI is running on Core 1. */
 void micro_run_bbc_cpu(void) {
+    /* Enable the FPU on this core immediately before the BBC CPU loop. The
+     * boot/init path leaves Core 0's CPACR with the FPU disabled, but GCC emits
+     * VFP spills (e.g. vpush {d8}) throughout the interpreter/timing code; those
+     * HardFault if the FPU is off. Enabling it here — the last point before the
+     * loop runs — is robust against anything earlier in boot clearing CPACR. */
+    frank_enable_fpu();
     if (g_bbc_thread.p_func) {
         g_bbc_thread.p_func(g_bbc_thread.p_arg);
     }

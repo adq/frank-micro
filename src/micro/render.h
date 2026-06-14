@@ -71,10 +71,30 @@ void render_set_RA(struct render_struct* p_render, uint32_t row_address);
  * all pending pixel table rebuilds are taken care of.
  */
 void render_prepare(struct render_struct* p_render);
+/* Force the pixel render tables to be rebuilt on the next render_prepare().
+ * Needed when render runs on a different thread to the CPU that writes the
+ * palette: the lazy dirty-flag (render_tables_built) is updated with a
+ * non-atomic read-modify-write and a concurrent palette write can be lost,
+ * leaving a table built from a stale palette. Forcing a rebuild each frame
+ * keeps the displayed palette correct. */
+void render_force_table_rebuild(struct render_struct* p_render);
+void render_debug_dump_lut(struct render_struct* p_render);
 void render_render(struct render_struct* p_render,
                    uint8_t data,
                    uint16_t addr,
                    uint64_t ticks);
+
+#ifdef PICO_BUILD
+/* Batched non-teletext row renderer (Pico full-frame path). Renders `count`
+ * consecutive display bytes in one call with the mode dispatch hoisted out of
+ * the per-byte loop, eliminating per-byte function-call overhead. cursor_col is
+ * the column index within the run to XOR for the text cursor, or -1 for none.
+ * Teletext (MODE 7) still uses the per-byte render_render() path. */
+void render_render_run(struct render_struct* p_render,
+                       const uint8_t* data,
+                       int count,
+                       int cursor_col);
+#endif
 
 void render_clear_buffer(struct render_struct* p_render);
 void render_process_full_buffer(struct render_struct* p_render);

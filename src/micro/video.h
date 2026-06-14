@@ -44,6 +44,8 @@ void video_power_on_reset(struct video_struct* p_video);
 uint64_t video_get_num_vsyncs(struct video_struct* p_video);
 uint64_t video_get_num_crtc_advances(struct video_struct* p_video);
 struct render_struct* video_get_render(struct video_struct* p_video);
+void video_pal_log_dump(struct video_struct* p_video);
+void video_debug_dump_crtc(struct video_struct* p_video);
 
 void video_apply_wall_time_delta(struct video_struct* p_video, uint64_t delta);
 

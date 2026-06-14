@@ -240,6 +240,10 @@ void micro_keyboard_poll(void) {
         int bbc_key = duke3d_to_beebjit(sc);
         if (bbc_key < 0) continue;
 
+        if (bbc_key == k_keyboard_key_delete || bbc_key == k_keyboard_key_f12) {
+            printf("DBG PS2 sc=%02x pressed=%d -> bbckey=%d\n", sc, pressed, bbc_key);
+        }
+
         if (pressed)
             keyboard_system_key_pressed(p_kbd, (uint8_t)bbc_key);
         else

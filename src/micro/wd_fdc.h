@@ -30,4 +30,12 @@ void wd_fdc_break_reset(struct wd_fdc_struct* p_fdc);
 uint8_t wd_fdc_read(struct wd_fdc_struct* p_fdc, uint16_t addr);
 void wd_fdc_write(struct wd_fdc_struct* p_fdc, uint16_t addr, uint8_t val);
 
+/* Diagnostics. */
+void wd_fdc_set_log_commands(struct wd_fdc_struct* p_fdc, int on);
+void wd_fdc_get_diag(struct wd_fdc_struct* p_fdc,
+                     uint8_t* p_status, uint8_t* p_track,
+                     uint8_t* p_sector, uint8_t* p_command,
+                     uint32_t* p_state);
+uint32_t wd_fdc_get_read_overruns(struct wd_fdc_struct* p_fdc);
+
 #endif /* BEEBJIT_WD_FDC_H */

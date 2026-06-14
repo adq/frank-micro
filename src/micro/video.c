@@ -12,7 +12,24 @@
 #include <inttypes.h>
 #include <limits.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <string.h>
+
+#ifdef PICO_BUILD
+#include "pico.h"
+#define FRANK_FAST_FUNC(decl) __not_in_flash_func(decl)
+/* Forbid FP/SIMD register use in selected integer-only hot functions. With
+ * -mfloat-abi=softfp, GCC otherwise spills 64-bit pixel-LUT values into the
+ * callee-saved FP register d8 (vpush/vstr d8). Reaching that d8 access in a
+ * context where the FPU coprocessor is not enabled raises a NOCP UsageFault
+ * that escalates to a HardFault — the crash seen entering POP's cut scene.
+ * Applied per-function because -mgeneral-regs-only on the whole translation
+ * unit trips a GCC ICE via the bundled test-video.c code. */
+#define FRANK_NO_FPU __attribute__((target("general-regs-only")))
+#else
+#define FRANK_FAST_FUNC(decl) decl
+#define FRANK_NO_FPU
+#endif
 
 /* A real BBC in a non-interlaced bitmapped mode has a CRTC period of 19968us,
  * just short of 20ms.
@@ -25,6 +42,12 @@
  * of exactly 20000us.
  */
 static const uint32_t k_video_us_per_vsync = 19968; /* about 20ms / 50Hz */
+
+/* DEBUG: ring buffer logging every ULA palette write (index, val, prev). */
+#define VIDEO_PAL_LOG_SIZE 512
+struct video_pal_log_entry { uint8_t index; uint8_t val; uint8_t prev; };
+static struct video_pal_log_entry s_video_pal_log[VIDEO_PAL_LOG_SIZE];
+static volatile uint32_t s_video_pal_log_count;
 
 static const uint32_t k_crtc_register_mask = 0x1F;
 
@@ -1759,7 +1782,8 @@ video_apply_wall_time_delta(struct video_struct* p_video, uint64_t delta) {
 }
 
 void
-video_render_full_frame(struct video_struct* p_video) {
+FRANK_NO_FPU
+FRANK_FAST_FUNC(video_render_full_frame)(struct video_struct* p_video) {
   uint32_t i_cols;
   uint32_t i_lines;
   uint32_t i_rows;
@@ -1836,6 +1860,12 @@ video_render_full_frame(struct video_struct* p_video) {
     num_pre_cols = (horiz_total - p_regs[k_crtc_reg_horiz_position]);
   }
 
+  /* Clear the back buffer first so stale pixels from a previous frame's
+   * larger display area (e.g. the MODE 7 boot/loader text that lingers in the
+   * lower border once POP switches to the smaller MODE 2 palace screen) don't
+   * persist in the regions this frame doesn't paint. */
+  render_clear_buffer(p_render);
+  render_force_table_rebuild(p_render);
   render_prepare(p_render);
   render_vsync(p_render);
   render_set_DISPEN(p_render, 0);
@@ -1849,35 +1879,60 @@ video_render_full_frame(struct video_struct* p_video) {
     for (i_lines = 0; i_lines < num_lines; ++i_lines) {
       render_set_RA(p_render, i_lines);
       crtc_line_address = (crtc_start_address + (i_rows * num_cols));
-      for (i_cols = 0; i_cols < num_pre_cols; ++i_cols) {
-        render_render(p_render, 0x00, 0, 0);
-      }
-      render_set_DISPEN(p_render, 1);
-      teletext_DISPEN_changed(p_teletext, 1);
-      for (i_cols = 0; i_cols < num_cols; ++i_cols) {
-        uint8_t data;
-        crtc_line_address &= 0x3FFF;
-        if (cursor_active &&
-            (crtc_line_address == cursor_match_addr) &&
-            (i_lines >= cursor_start_raster) &&
-            (i_lines <= cursor_end_raster)) {
-          render_cursor(p_render);
-        }
-        data = video_read_data_byte(p_video,
-                                    0,
-                                    crtc_line_address,
-                                    i_lines,
-                                    screen_wrap_add);
-        render_render(p_render, data, crtc_line_address, 0);
-        crtc_line_address++;
-      }
       if (is_teletext) {
+        for (i_cols = 0; i_cols < num_pre_cols; ++i_cols) {
+          render_render(p_render, 0x00, 0, 0);
+        }
+        render_set_DISPEN(p_render, 1);
+        teletext_DISPEN_changed(p_teletext, 1);
+        for (i_cols = 0; i_cols < num_cols; ++i_cols) {
+          uint8_t data;
+          crtc_line_address &= 0x3FFF;
+          if (cursor_active &&
+              (crtc_line_address == cursor_match_addr) &&
+              (i_lines >= cursor_start_raster) &&
+              (i_lines <= cursor_end_raster)) {
+            render_cursor(p_render);
+          }
+          data = video_read_data_byte(p_video,
+                                      0,
+                                      crtc_line_address,
+                                      i_lines,
+                                      screen_wrap_add);
+          render_render(p_render, data, crtc_line_address, 0);
+          crtc_line_address++;
+        }
         /* Send along three extra characters, because the teletext display
          * path is pipelined, and three behind.
          */
         for (i_cols = 0; i_cols < 3; ++i_cols) {
           render_render(p_render, 0x00, 0, 0);
         }
+      } else {
+        /* Graphics modes: the pre-column blanking render_render() calls are
+         * no-ops (DISPEN is low → early return) and the per-byte dispatch is
+         * constant across the row, so fetch the whole row's bytes and paint it
+         * in one batched call. */
+        uint8_t row_bytes[256];
+        int n = (num_cols > 256) ? 256 : (int) num_cols;
+        int cursor_col = -1;
+        int cursor_line = (cursor_active &&
+                           (i_lines >= cursor_start_raster) &&
+                           (i_lines <= cursor_end_raster));
+        for (i_cols = 0; i_cols < (uint32_t) n; ++i_cols) {
+          crtc_line_address &= 0x3FFF;
+          if (cursor_line && (crtc_line_address == cursor_match_addr)) {
+            cursor_col = (int) i_cols;
+          }
+          row_bytes[i_cols] = video_read_data_byte(p_video,
+                                                   0,
+                                                   crtc_line_address,
+                                                   i_lines,
+                                                   screen_wrap_add);
+          crtc_line_address++;
+        }
+        render_set_DISPEN(p_render, 1);
+        render_render_run(p_render, row_bytes, n, cursor_col);
       }
       render_set_DISPEN(p_render, 0);
       teletext_DISPEN_changed(p_teletext, 0);
@@ -1980,6 +2035,14 @@ video_ula_write_palette(struct video_struct* p_video, uint8_t val) {
 
   val = (val & 0x0F);
 
+  {
+    uint32_t i = s_video_pal_log_count % VIDEO_PAL_LOG_SIZE;
+    s_video_pal_log[i].index = index;
+    s_video_pal_log[i].val = val;
+    s_video_pal_log[i].prev = p_video->ula_palette[index];
+    s_video_pal_log_count++;
+  }
+
   if (p_video->ula_palette[index] == val) {
     return;
   }
@@ -1991,6 +2054,41 @@ video_ula_write_palette(struct video_struct* p_video, uint8_t val) {
   p_video->ula_palette[index] = val;
 
   render_set_physical_color(p_video->p_render, index, val);
+}
+
+void
+video_debug_dump_crtc(struct video_struct* p_video) {
+  uint32_t k;
+  printf("CRTC R:");
+  for (k = 0; k < k_video_crtc_num_registers; k++) {
+    printf(" %u", p_video->crtc_registers[k]);
+  }
+  printf("\nULActl=%u cur_dis=%d cur_flash=%d cur_mask=%u ext_clk=%d\n",
+         p_video->video_ula_control, p_video->cursor_disabled,
+         p_video->cursor_flashing, (unsigned) p_video->cursor_flash_mask,
+         p_video->externally_clocked);
+}
+
+void
+video_pal_log_dump(struct video_struct* p_video) {
+  uint32_t total = s_video_pal_log_count;
+  uint32_t n = (total < VIDEO_PAL_LOG_SIZE) ? total : VIDEO_PAL_LOG_SIZE;
+  uint32_t start = (total < VIDEO_PAL_LOG_SIZE) ? 0
+                                                : (total % VIDEO_PAL_LOG_SIZE);
+  uint32_t k;
+  printf("PALLOG total=%u showing=%u\n", (unsigned) total, (unsigned) n);
+  for (k = 0; k < n; k++) {
+    uint32_t i = (start + k) % VIDEO_PAL_LOG_SIZE;
+    /* index:newval(prev) */
+    printf("%u:%u<%u ", s_video_pal_log[i].index, s_video_pal_log[i].val,
+           s_video_pal_log[i].prev);
+  }
+  printf("\nULA[0..15]:");
+  for (k = 0; k < 16; k++) {
+    printf(" %u", p_video->ula_palette[k]);
+  }
+  printf("\n");
+  s_video_pal_log_count = 0;
 }
 
 void

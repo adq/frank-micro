@@ -259,6 +259,16 @@ volatile uint32_t frank_hdmi_heartbeat_lines = 0;
 volatile uint32_t frank_hdmi_heartbeat_frames = 0;
 
 static void __not_in_flash_func(core1_main)(void) {
+    /* Enable this core's FPU (CP10/CP11). The custom fast-boot path skips the
+     * SDK per-core coprocessor init, and GCC emits VFP spills (e.g. vpush {d8})
+     * in ordinary code; executing those with the FPU off HardFaults the core. */
+    do {
+        volatile uint32_t* cpacr = (volatile uint32_t*)0xE000ED88u;
+        *cpacr |= (0x3u << 20) | (0x3u << 22);
+        __asm volatile("dsb");
+        __asm volatile("isb");
+    } while (0);
+
     dvi_register_irqs_this_core(&dvi0, DMA_IRQ_1);
 
     for (int i = 0; i < N_SCANLINE_BUFS; ++i) {

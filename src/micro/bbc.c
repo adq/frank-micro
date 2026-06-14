@@ -675,6 +675,11 @@ bbc_get_acccon(struct bbc_struct* p_bbc) {
   return p_bbc->acccon;
 }
 
+uint8_t*
+bbc_get_hazel(struct bbc_struct* p_bbc) {
+  return p_bbc->p_mem_hazel;
+}
+
 static uint8_t
 bbc_get_effective_bank(struct bbc_struct* p_bbc, uint8_t romsel) {
   romsel &= 0xF;
@@ -1809,6 +1814,9 @@ bbc_virtual_keyboard_updated_callback(void* p) {
   /* Check for BREAK key. */
   if (keyboard_consume_key_press(p_bbc->p_keyboard, k_keyboard_key_f12) ||
       keyboard_consume_key_press(p_bbc->p_keyboard, k_keyboard_key_delete)) {
+#if defined(PICO_BUILD)
+    { static int g_dbg_break_n; log_do_log(k_log_misc, k_log_info, "DBG BREAK trigger #%d", ++g_dbg_break_n); }
+#endif
     /* We're in the middle of some timer callback. Let the CPU driver initiate
      * the actual reset at a safe time.
      */
@@ -1821,6 +1829,10 @@ static void
 bbc_do_reset_callback(void* p, uint32_t flags) {
   struct bbc_struct* p_bbc = (struct bbc_struct*) p;
   struct cpu_driver* p_cpu_driver = p_bbc->p_cpu_driver;
+
+#if defined(PICO_BUILD)
+  { static int g_dbg_reset_n; log_do_log(k_log_misc, k_log_info, "DBG RESET cb #%d flags=%x", ++g_dbg_reset_n, (unsigned)flags); }
+#endif
 
   if (flags & k_cpu_flag_soft_reset) {
     bbc_break_reset(p_bbc);
@@ -2057,7 +2069,7 @@ bbc_create(int mode,
   if (util_has_option(p_opt_flags, "video:no-memory-sync")) {
     p_bbc->do_video_memory_sync = 0;
   }
-#ifdef PICO_BUILD
+#if defined(PICO_BUILD) && defined(FRANK_PERF_TIMING_HACKS)
   /* Track B lever: the per-6502-write CRTC sync callback
    * (video_advance_for_memory_sync) is the single biggest interpreter cost.
    * Dropping it roughly doubles throughput on the RP2350. Some mid-frame
@@ -2228,16 +2240,35 @@ bbc_create(int mode,
     synchronous_sound = 1;
   }
 
-#ifdef PICO_BUILD
+#if defined(PICO_BUILD) && defined(FRANK_PERF_TIMING_HACKS)
   /* Track B lever: in accurate mode every peripheral is tick-accurate, i.e.
    * advanced through the fine-grained timing countdown on every 6502 cycle.
    * That per-tick CRTC bookkeeping dominates interpreter cost on the RP2350
    * (~70% of all emulation time). Externally (polled) clocking advances them
    * by wall-time delta instead, which is far cheaper, and the screen is drawn
    * once per frame via video_render_full_frame() from the Pico vsync handler. */
+#if defined(FRANK_EXTERNAL_CLOCK_PERIPHERALS)
   externally_clocked_via = 1;
   externally_clocked_crtc = 1;
   externally_clocked_adc = 1;
+#else
+  /* CORRECTNESS over speed: the RP2350 cannot sustain real-time 2MHz, so
+   * wall-time-polled ("externally clocked") peripherals advance out of step
+   * with actual CPU progress — the 50Hz system-VIA IRQ and CRTC cadence drift
+   * relative to the emulated cycle count. Timing-sensitive Master 128 titles
+   * (Prince of Persia's per-room decompress loader) then diverge and crash.
+   * Internally (cycle-) clocked peripherals are driven by the emulated cycle
+   * count via the timing wheel, so their timing is correct regardless of how
+   * slowly the host runs — exactly matching beebjit. Slower, but correct. */
+  externally_clocked_via = 0;
+  externally_clocked_crtc = 0;
+  externally_clocked_adc = 0;
+#endif
+  /* Match beebjit's non-accurate config exactly: POP (and other timing-sensitive
+   * Master 128 titles) crash under accurate internally-clocked peripherals but
+   * run correctly with externally-clocked (polled) peripherals + async sound,
+   * verified against desktop beebjit `-mode interp -fast`. */
+  synchronous_sound = 0;
 #endif
 
   p_timing = timing_create(cpu_scale_factor);
@@ -3173,6 +3204,20 @@ static void*
 bbc_cpu_thread(void* p) {
   int exited;
   struct bbc_message message;
+
+#if defined(PICO_BUILD)
+  /* Enable the Cortex-M33 FPU on this (Core 0) thread. The warm/watchdog-boot
+   * path can leave CPACR.CP10/CP11 disabled; GCC emits VFP spills throughout
+   * the interpreter/timing/sound code, which NOCP-HardFault if the FPU is off.
+   * This is the last code that runs on Core 0 before the CPU loop, so it is
+   * the most robust place to guarantee the FPU is on regardless of boot path. */
+  {
+    volatile uint32_t* cpacr = (volatile uint32_t*)0xE000ED88u;
+    *cpacr |= (0x3u << 20) | (0x3u << 22);
+    __asm volatile("dsb");
+    __asm volatile("isb");
+  }
+#endif
 
   struct bbc_struct* p_bbc = (struct bbc_struct*) p;
   struct cpu_driver* p_cpu_driver = p_bbc->p_cpu_driver;

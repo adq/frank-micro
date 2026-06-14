@@ -1092,6 +1092,11 @@ render_prepare(struct render_struct* p_render) {
 }
 
 void
+render_force_table_rebuild(struct render_struct* p_render) {
+  p_render->render_tables_built = 0;
+}
+
+void
 render_render(struct render_struct* p_render,
               uint8_t data,
               uint16_t addr,

@@ -141,6 +141,7 @@ struct wd_fdc_struct {
   uint32_t on_disc_length;
   uint16_t on_disc_crc;
   int last_mfm_bit;
+  uint32_t diag_read_overruns;
 };
 
 static void
@@ -550,6 +551,7 @@ wd_fdc_set_drq(struct wd_fdc_struct* p_fdc, int level) {
   if (level) {
     if (p_fdc->status_register & k_wd_fdc_status_type_II_III_drq) {
       p_fdc->status_register |= k_wd_fdc_status_type_II_III_lost_byte;
+      p_fdc->diag_read_overruns++;
     }
     p_fdc->status_register |= k_wd_fdc_status_type_II_III_drq;
   } else {
@@ -1594,4 +1596,26 @@ wd_fdc_set_drives(struct wd_fdc_struct* p_fdc,
 void
 wd_fdc_set_is_opus(struct wd_fdc_struct* p_fdc, int is_opus) {
   p_fdc->is_opus = is_opus;
+}
+
+void
+wd_fdc_set_log_commands(struct wd_fdc_struct* p_fdc, int on) {
+  p_fdc->log_commands = on;
+}
+
+void
+wd_fdc_get_diag(struct wd_fdc_struct* p_fdc,
+                uint8_t* p_status, uint8_t* p_track,
+                uint8_t* p_sector, uint8_t* p_command,
+                uint32_t* p_state) {
+  *p_status  = p_fdc->status_register;
+  *p_track   = p_fdc->track_register;
+  *p_sector  = p_fdc->sector_register;
+  *p_command = p_fdc->command;
+  *p_state   = p_fdc->state;
+}
+
+uint32_t
+wd_fdc_get_read_overruns(struct wd_fdc_struct* p_fdc) {
+  return p_fdc->diag_read_overruns;
 }

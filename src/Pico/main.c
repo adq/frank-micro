@@ -21,6 +21,7 @@
 #include <stdbool.h>
 
 #include "board_config.h"
+#include "fpu_enable.h"
 #include "HDMI.h"
 #include "crash_handler.h"
 #include "psram_init.h"
@@ -98,15 +99,39 @@ extern volatile bool* micro_core1_ready_ptr(void);
 #endif
 
 /* ── pico_vsync_handler — called from within bbc.c at every BBC vsync ────── */
+/* Render performance instrumentation (read via RPERF serial command). */
+volatile uint32_t g_vsync_calls = 0;
+volatile uint32_t g_render_calls = 0;
+volatile uint64_t g_render_us_accum = 0;
+volatile uint64_t g_present_us_accum = 0;
+
+void pico_render_perf_get(uint32_t* p_vsync, uint32_t* p_render,
+                          uint64_t* p_render_us, uint64_t* p_present_us) {
+    *p_vsync = g_vsync_calls;
+    *p_render = g_render_calls;
+    *p_render_us = g_render_us_accum;
+    *p_present_us = g_present_us_accum;
+}
+void pico_render_perf_reset(void) {
+    g_vsync_calls = 0; g_render_calls = 0;
+    g_render_us_accum = 0; g_present_us_accum = 0;
+}
+
 void pico_vsync_handler(int do_full_render) {
     /* In externally-clocked (polled CRTC) mode the per-tick rendering loop is
      * skipped for speed, so the frame is drawn here in one pass from current
      * CRTC + video memory state before being presented. */
+    g_vsync_calls++;
     if (do_full_render && g_p_bbc) {
+        uint64_t t0 = time_us_64();
         video_render_full_frame(bbc_get_video(g_p_bbc));
+        g_render_us_accum += (time_us_64() - t0);
+        g_render_calls++;
     }
     micro_keyboard_poll();
+    uint64_t tp = time_us_64();
     micro_frame_present();
+    g_present_us_accum += (time_us_64() - tp);
     crash_handler_feed();  /* keep watchdog alive — Master 128 is slow via PSRAM */
 }
 
@@ -114,16 +139,10 @@ void pico_vsync_handler(int do_full_render) {
 static void beebjit_main(void) {
     micro_settings_load();
 
-    /* Safety: if we previously crashed (crash handler set CRASH_SENT),
-     * fall back to Model B to avoid an infinite crash loop. */
-    {
-        volatile uint32_t* p_scratch = (volatile uint32_t*)(0x400d800cu);
-        if (*p_scratch == 0xDEAD5E41u && g_micro_settings.model != MICRO_MODEL_B) {
-            printf("Previous crash detected — falling back to Model B\n");
-            g_micro_settings.model = MICRO_MODEL_B;
-            micro_settings_save();
-        }
-    }
+    /* DEBUG: hardcode Master 128 by default (POP cut-scene debugging). This
+     * overrides saved settings and skips the crash→Model B fallback so the
+     * board always comes up as a Master 128 ready to run Prince of Persia. */
+    g_micro_settings.model = MICRO_MODEL_MASTER_128;
 
 #ifdef FRANK_FORCE_MODEL_B
     /* Hard override — ignore saved settings, always boot Model B. */
@@ -271,7 +290,11 @@ static void beebjit_main(void) {
     while (true) sleep_ms(1000);
 }
 
+volatile uint32_t g_cpacr_entry, g_cpacr_after;
 int main(void) {
+    g_cpacr_entry = *(volatile uint32_t*)0xE000ED88u;
+    frank_enable_fpu();
+    g_cpacr_after = *(volatile uint32_t*)0xE000ED88u;
 #if CPU_CLOCK_MHZ > 252
     vreg_disable_voltage_limit();
     vreg_set_voltage(CPU_VOLTAGE);
@@ -293,6 +316,9 @@ int main(void) {
     printf("  frank-micro — BBC Micro for RP2350\n");
     printf("  version %s  board " FRANK_MICRO_VERSION "\n", FRANK_MICRO_VERSION);
     printf("  cpu=%lu MHz\n", clock_get_hz(clk_sys) / 1000000u);
+    printf("  CPACR entry=0x%08lX after=0x%08lX now=0x%08lX\n",
+           (unsigned long)g_cpacr_entry, (unsigned long)g_cpacr_after,
+           (unsigned long)*(volatile uint32_t*)0xE000ED88u);
     printf("========================================\n");
 
     crash_handler_install();

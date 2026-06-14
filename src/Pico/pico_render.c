@@ -26,6 +26,27 @@
 #include <string.h>
 #include <stdlib.h>
 #include <stdint.h>
+#include <stdio.h>
+#ifdef PICO_BUILD
+#include "pico.h"
+#endif
+#ifndef FRANK_FAST_FUNC
+#ifdef PICO_BUILD
+#define FRANK_FAST_FUNC(decl) __not_in_flash_func(decl)
+#else
+#define FRANK_FAST_FUNC(decl) decl
+#endif
+#endif
+
+/* Forbid FP/SIMD register use in the integer-only pixel render hot path; see
+ * the matching note in video.c. Prevents GCC from spilling 64-bit pixel-LUT
+ * values into FP register d8, whose access NOCP-faults when the FPU
+ * coprocessor is not enabled (crash entering POP's cut scene). */
+#ifdef PICO_BUILD
+#define FRANK_NO_FPU __attribute__((target("general-regs-only")))
+#else
+#define FRANK_NO_FPU
+#endif
 
 /* Map a teletext RGBA host pixel (0xAARRGGBB) to a BBC physical colour
  * index 0-7.  BBC encoding: bit0=red, bit1=green, bit2=blue. */
@@ -74,11 +95,6 @@ static inline uint8_t tt_aa_index(uint32_t r, uint32_t g, uint32_t b) {
 extern uint8_t *SCREEN[2];
 extern volatile uint32_t current_buffer;
 
-/* ── Diagnostics ─────────────────────────────────────────────────────────── */
-volatile uint32_t g_pico_render_calls   = 0;  /* render_render() entries */
-volatile uint32_t g_pico_render_painted = 0;  /* render_render() with dispen */
-volatile uint32_t g_pico_render_mode    = 0;  /* packed: clk<<8|cpl */
-volatile uint32_t g_pico_vsync_calls    = 0;  /* render_vsync() entries */
 
 /* ── Render state ─────────────────────────────────────────────────────────── */
 struct render_struct {
@@ -175,8 +191,8 @@ static const uint32_t k_bbc_colours[8] = {
  * Output: 4 bytes (pixels 0,2,4,6 — take every other for 2:1 downsample).
  */
 static void rebuild_lut2(struct render_struct* p) {
-    uint8_t c0 = p->physical_lut[0] & 7;
-    uint8_t c1 = p->physical_lut[1] & 7;
+    uint8_t c0 = (p->physical_lut[0] ^ 7) & 7;
+    uint8_t c1 = (p->physical_lut[1] ^ 7) & 7;
     for (int byte = 0; byte < 256; byte++) {
         uint32_t out = 0;
         /* Take pixels 0,2,4,6 (bits 7,5,3,1). */
@@ -201,7 +217,7 @@ static void rebuild_lut1_4col(struct render_struct* p) {
             int bit_hi = 7 - px;
             int bit_lo = 3 - px;
             int log_col = (((byte >> bit_hi) & 1) << 1) | ((byte >> bit_lo) & 1);
-            uint8_t phys = p->physical_lut[log_col] & 7;
+            uint8_t phys = (p->physical_lut[log_col] ^ 7) & 7;
             /* Each logical pixel maps to 2 output pixels. */
             out |= (uint64_t)phys << (px * 16);
             out |= (uint64_t)phys << (px * 16 + 8);
@@ -215,8 +231,8 @@ static void rebuild_lut1_4col(struct render_struct* p) {
  * Each bit → 1 output pixel.
  */
 static void rebuild_lut1_2col(struct render_struct* p) {
-    uint8_t c0 = p->physical_lut[0] & 7;
-    uint8_t c1 = p->physical_lut[1] & 7;
+    uint8_t c0 = (p->physical_lut[0] ^ 7) & 7;
+    uint8_t c1 = (p->physical_lut[1] ^ 7) & 7;
     for (int byte = 0; byte < 256; byte++) {
         uint64_t out = 0;
         for (int bit = 0; bit < 8; bit++) {
@@ -236,12 +252,16 @@ static void rebuild_lut1_2col(struct render_struct* p) {
  */
 static void rebuild_lut1_16col(struct render_struct* p) {
     for (int byte = 0; byte < 256; byte++) {
-        int log0 = ((byte >> 7) & 1) | (((byte >> 5) & 1) << 1) |
-                   (((byte >> 3) & 1) << 2) | (((byte >> 1) & 1) << 3);
-        int log1 = ((byte >> 6) & 1) | (((byte >> 4) & 1) << 1) |
-                   (((byte >> 2) & 1) << 2) | (( byte       & 1) << 3);
-        uint8_t p0 = p->physical_lut[log0] & 15;
-        uint8_t p1 = p->physical_lut[log1] & 15;
+        /* Logical colour bit order must match the authoritative beebjit
+         * decoder (render.c render_generate_1MHz_table): logical bit0 = data
+         * bit1, bit1 = data bit3, bit2 = data bit5, bit3 = data bit7 for the
+         * left pixel; the right pixel uses the even data bits. */
+        int log0 = ((byte >> 1) & 1) | (((byte >> 3) & 1) << 1) |
+                   (((byte >> 5) & 1) << 2) | (((byte >> 7) & 1) << 3);
+        int log1 = ((byte >> 0) & 1) | (((byte >> 2) & 1) << 1) |
+                   (((byte >> 4) & 1) << 2) | (((byte >> 6) & 1) << 3);
+        uint8_t p0 = (p->physical_lut[log0] ^ 7) & 7;
+        uint8_t p1 = (p->physical_lut[log1] ^ 7) & 7;
         uint64_t out = (uint64_t)p0 | ((uint64_t)p0 << 8) |
                        ((uint64_t)p1 << 16) | ((uint64_t)p1 << 24);
         p->lut1_20[byte] = out;
@@ -285,9 +305,13 @@ struct render_struct* render_create(struct teletext_struct* p_teletext,
     p->width  = SCR_W;
     p->height = SCR_H;
 
-    /* Default physical colours: identity mapping. */
+    /* Physical colour LUT mirrors video.c's ula_palette, which resets to all
+     * zero (video_ula_power_on_reset). video_ula_write_palette skips the
+     * renderer update when the new value equals the cached ula_palette entry,
+     * so physical_lut MUST start in the same all-zero state or the two copies
+     * desync and palette writes get silently dropped. */
     for (int i = 0; i < 16; i++)
-        p->physical_lut[i] = (uint8_t)(i & 7);
+        p->physical_lut[i] = 0;
 
     p->is_clock_2MHz  = 0;
     p->chars_per_line = 40;
@@ -303,8 +327,9 @@ void render_power_on_reset(struct render_struct* p) {
     p->x = 0; p->y = 0;
     p->dispen = 0;
     p->flash_on = 0;
+    /* Reset to all-zero to stay in lockstep with video.c's ula_palette reset;
+     * see the matching note in render_create(). */
     memset(p->physical_lut, 0, sizeof(p->physical_lut));
-    for (int i = 0; i < 8; i++) p->physical_lut[i] = (uint8_t)i;
     p->table_dirty = 1;
 }
 
@@ -405,6 +430,19 @@ void render_prepare(struct render_struct* p) {
     if (p->table_dirty) rebuild_pixel_tables(p);
 }
 
+void render_force_table_rebuild(struct render_struct* p) {
+    p->table_dirty = 1;
+}
+
+void render_debug_dump_lut(struct render_struct* p) {
+    printf("RENDER clk2M=%d cpl=%d tt=%d dirty=%d flash=%d\n",
+           p->is_clock_2MHz, p->chars_per_line, p->is_teletext,
+           p->table_dirty, p->flash_on);
+    printf("PHYS_LUT:");
+    for (int i = 0; i < 16; i++) printf(" %d", p->physical_lut[i]);
+    printf("\n");
+}
+
 /* ── Core pixel rendering ─────────────────────────────────────────────────── */
 
 /* Effective output row = raw scanline minus the per-frame latched top. */
@@ -417,14 +455,10 @@ static inline uint8_t* screen_row(int y) {
     return SCREEN[current_buffer ^ 1] + y * SCR_W;
 }
 
-void render_render(struct render_struct* p,
+void FRANK_NO_FPU FRANK_FAST_FUNC(render_render)(struct render_struct* p,
                     uint8_t data,
                     uint16_t addr,
                     uint64_t ticks) {
-    g_pico_render_calls++;
-    g_pico_render_mode = ((uint32_t)p->is_clock_2MHz << 8) | (uint32_t)p->chars_per_line
-                       | ((uint32_t)p->is_teletext << 16);
-
     /* ── Teletext (MODE 7) ───────────────────────────────────────────────
      * The SAA5050 is driven by video.c directly (DISPEN/RA/VSYNC).  Here we
      * feed it data bytes and render the pipelined glyph output.  Feeding
@@ -465,7 +499,6 @@ void render_render(struct render_struct* p,
             } else if (p->cursor_pending == 1) {
                 p->cursor_pending = 2;
             }
-            g_pico_render_painted++;
         }
         p->x += 8;
         return;
@@ -477,8 +510,6 @@ void render_render(struct render_struct* p,
     }
 
     if (p->table_dirty) rebuild_pixel_tables(p);
-
-    g_pico_render_painted++;
 
     uint8_t* row = screen_row(eff_y(p));
     if (!row) return;
@@ -598,6 +629,70 @@ void render_render(struct render_struct* p,
     }
 }
 
+/* Batched non-teletext row renderer.  Mirrors the per-byte render_render()
+ * graphics paths but hoists the mode dispatch out of the per-byte loop and
+ * uses aligned 32-bit stores (render_set_DISPEN snaps x to 0 at the start of a
+ * non-teletext active region, and the per-byte step is 4 or 8, so row+x stays
+ * 4-byte aligned — SCREEN[] is aligned(4) and SCR_W is a multiple of 4). */
+void FRANK_NO_FPU FRANK_FAST_FUNC(render_render_run)(struct render_struct* p,
+                       const uint8_t* data,
+                       int count,
+                       int cursor_col) {
+    if (p->table_dirty) rebuild_pixel_tables(p);
+
+    int yy = p->y - p->y_base;
+    if ((unsigned)yy >= (unsigned)SCR_H) return;  /* whole row off-screen */
+    uint8_t* row = SCREEN[current_buffer ^ 1] + (unsigned)yy * SCR_W;
+    int x = p->x;
+
+    /* Decode the mode once — it is constant across the whole row. */
+    const uint64_t* l64 = NULL;
+    const uint32_t* l32 = NULL;
+    int step;       /* output pixels per byte (4 or 8) */
+    if (p->is_clock_2MHz) {
+        switch (p->chars_per_line) {
+        case 2:  l64 = p->lut1;    step = 8; break;  /* MODE1 */
+        case 1:  l64 = p->lut1_20; step = 4; break;  /* MODE2 */
+        default: l32 = p->lut2;    step = 4; break;  /* MODE0 */
+        }
+    } else {
+        switch (p->chars_per_line) {
+        case 3:
+        case 2:
+        case 1:  l64 = p->lut1;    step = 8; break;
+        case 0:  l64 = p->lut1_20; step = 4; break;
+        default: p->x = x + count * 8; return;       /* unknown — advance only */
+        }
+    }
+
+    for (int i = 0; i < count; i++) {
+        int xb = x;
+        if (l64) {
+            uint64_t pix = l64[data[i]];
+            if (step == 8) {
+                if (x + 8 <= SCR_W) {
+                    *(uint32_t*)(row + x)     = (uint32_t)pix;
+                    *(uint32_t*)(row + x + 4) = (uint32_t)(pix >> 32);
+                }
+                x += 8;
+            } else {
+                if (x + 4 <= SCR_W) *(uint32_t*)(row + x) = (uint32_t)pix;
+                x += 4;
+            }
+        } else {
+            if (x + 4 <= SCR_W) *(uint32_t*)(row + x) = l32[data[i]];
+            x += 4;
+        }
+        if (i == cursor_col) {
+            int x0 = xb, x1 = x;
+            if (x0 < 0) x0 = 0;
+            if (x1 > SCR_W) x1 = SCR_W;
+            for (int k = x0; k < x1; k++) row[k] ^= 7;
+        }
+    }
+    p->x = x;
+}
+
 void render_clear_buffer(struct render_struct* p) {
     uint8_t* s = SCREEN[current_buffer ^ 1];
     if (s) memset(s, 0, SCR_W * SCR_H);
@@ -620,7 +715,6 @@ void render_hsync(struct render_struct* p, uint32_t hsync_pulse_ticks) {
 }
 
 void render_vsync(struct render_struct* p) {
-    g_pico_vsync_calls++;
     p->x = 0;
     p->y = 0;
     p->y_base = 0;

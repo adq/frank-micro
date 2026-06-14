@@ -6,6 +6,7 @@
 #include "bbc.h"
 #include "disc.h"
 #include "disc_drive.h"
+#include "disc_tool.h"
 #include "util.h"
 #include "ff.h"
 #include <string.h>
@@ -137,6 +138,37 @@ int micro_mount_disk(int drive, const char* path) {
         if (p_drive) {
             struct disc_struct* p_disc = disc_drive_get_disc(p_drive);
             if (p_disc) disc_load(p_disc);
+        }
+    }
+
+    /* DECISIVE PSRAM disc-integrity check: decode the just-built pulse image
+     * back into sectors and verify every sector's header+data CRC. If the
+     * PSRAM pulse image is byte-perfect, all CRCs pass and the disc path is
+     * exonerated; any CRC error implicates the PSRAM disc storage. */
+    {
+        struct disc_drive_struct* p_drive =
+            (drive == 0) ? bbc_get_drive_0(g_p_bbc) : bbc_get_drive_1(g_p_bbc);
+        struct disc_struct* p_disc = p_drive ? disc_drive_get_disc(p_drive) : NULL;
+        if (p_disc) {
+            struct disc_tool_struct* p_tool = disc_tool_create();
+            disc_tool_set_disc(p_tool, p_disc);
+            disc_tool_set_is_side_upper(p_tool, 0);
+            int total_sectors = 0, hdr_err = 0, data_err = 0, short_tracks = 0;
+            for (uint32_t t = 0; t < 80; ++t) {
+                uint32_t num = 0;
+                disc_tool_set_track(p_tool, t);
+                disc_tool_find_sectors(p_tool);
+                struct disc_tool_sector* p_sec = disc_tool_get_sectors(p_tool, &num);
+                if (num != 10) short_tracks++;
+                for (uint32_t i = 0; i < num; ++i) {
+                    total_sectors++;
+                    if (p_sec[i].has_header_crc_error) hdr_err++;
+                    if (p_sec[i].has_data_crc_error)   data_err++;
+                }
+            }
+            printf("DISCVERIFY: sectors=%d hdr_crc_err=%d data_crc_err=%d short_tracks=%d\n",
+                   total_sectors, hdr_err, data_err, short_tracks);
+            disc_tool_destroy(p_tool);
         }
     }
 

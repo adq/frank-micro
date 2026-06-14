@@ -38,6 +38,18 @@ void os_time_sleeper_sleep_us(struct os_time_sleeper* p_sleeper, uint64_t us) {
     }
     uint64_t now = time_us_64();
     if (p_sleeper->next_wake_us > now) {
-        sleep_us(p_sleeper->next_wake_us - now);
+        uint64_t delta = p_sleeper->next_wake_us - now;
+        /* This runs from the 6502 timer callback on the CPU core. The SDK's
+         * sleep_us() arms a timer alarm and blocks on the alarm-pool IRQ, which
+         * is unsafe to re-enter from here (it HardFaults the core). Use a pure
+         * hardware-timer busy-wait, which touches no IRQ/alarm machinery. The
+         * emulation runs slower than real time, so this pacing sleep is short
+         * and rare in practice; clamp it so a stale timestamp can't wedge the
+         * core in a long spin. */
+        if (delta > 20000) {
+            delta = 20000;
+            p_sleeper->next_wake_us = now + delta;
+        }
+        busy_wait_us(delta);
     }
 }
