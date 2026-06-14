@@ -441,5 +441,10 @@ target_link_libraries(frank-micro
 pico_enable_stdio_uart(frank-micro 0)
 pico_enable_stdio_usb(frank-micro 1)
 
+# Never let a printf() to USB-CDC block Core 0: if the host has the port
+# open but is not draining it, the default 500 ms blocking write stalls the
+# audio producer and causes a recurring dropout.  0 = drop chars instead.
+target_compile_definitions(frank-micro PRIVATE PICO_STDIO_USB_STDOUT_TIMEOUT_US=0)
+
 pico_add_extra_outputs(frank-micro)
 target_link_options(frank-micro PRIVATE -Xlinker --print-memory-usage --data-sections --function-sections)

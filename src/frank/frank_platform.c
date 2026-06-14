@@ -134,6 +134,14 @@ void frank_perf_tick(void) {
     if (t_last == 0) { t_last = time_us_64(); return; }
     uint64_t dt = time_us_64() - t_last;
     if (dt >= 1000000u) {
+#ifdef FRANK_PERF_LOG
+        /*
+         * Diagnostic telemetry.  OFF by default: printf() to USB-CDC can
+         * block Core 0 for up to PICO_STDIO_USB_STDOUT_TIMEOUT_US whenever the
+         * host has the port open but is not draining it, which stalls the
+         * audio producer and causes a recurring dropout.  Enable only when a
+         * terminal is actively reading the port.
+         */
         float fps = frames * 1000000.0f / (float)dt;
         float pct = fps * 100.0f / 50.0f;  /* BBC frame rate is 50 Hz */
 #if defined(HDMI_PIO_AUDIO)
@@ -166,6 +174,7 @@ void frank_perf_tick(void) {
 #else
         printf("PERF: emu=%.1f fps (%.0f%% real-time)\n", (double)fps, (double)pct);
 #endif
+#endif /* FRANK_PERF_LOG */
         frames = 0;
         t_last = time_us_64();
     }
