@@ -72,6 +72,7 @@ static const uint8_t xt_to_allegro[128] = {
 void frank_keyboard_poll(void) {
     int pressed;
     unsigned char sc;
+    ps2kbd_tick();   /* drain PIO FIFO -> event queue */
     while (ps2kbd_get_key(&pressed, &sc)) {
         if (sc >= 128) continue;
         int code = xt_to_allegro[sc];
