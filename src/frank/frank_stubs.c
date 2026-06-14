@@ -9,10 +9,13 @@
 #include <stdint.h>
 #include "b-em.h"
 
-/* "Garbage" read/write target for unmapped memory accesses.  On device mem.c
- * points these at XIP_NOCACHE_NOALLOC_BASE; we just provide the storage. */
+/* "Garbage" read/write target for unmapped memory accesses.  With the C
+ * interpreter (6502.c) mem.c declares these; we provide the storage.  The
+ * thumb_cpu path (cpu_mem.c) defines its own, so skip them there. */
+#ifndef USE_PICO_CPU
 uint8_t *g_garbage_read;
 uint8_t *g_garbage_write;
+#endif
 
 /* WAV loader: only used by the filesystem ddnoise/tapenoise path, which we do
  * not use (USE_MEM_DDNOISE provides in-memory samples).  Return NULL. */

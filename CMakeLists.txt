@@ -199,9 +199,41 @@ set_source_files_properties(drivers/dlmalloc.c PROPERTIES COMPILE_DEFINITIONS
 # ── BBC Micro (b-em) engine sources ────────────────────────────────────────
 set(BEM_DIR ${CMAKE_CURRENT_SOURCE_DIR}/src/bem)
 
+# Use the hand-written Thumb-assembly 6502 + hw_event scheduler (fast path).
+# Set to OFF to fall back to the portable C interpreter (src/bem/6502.c).
+option(USE_THUMB_CPU "Use thumb_cpu asm 6502 + hw_event scheduler" ON)
+
+set(THUMB_DIR ${BEM_DIR}/thumb_cpu)
+set(THUMB_GEN_DIR ${CMAKE_CURRENT_BINARY_DIR}/thumb_gen)
+
+if(USE_THUMB_CPU)
+    file(MAKE_DIRECTORY ${THUMB_GEN_DIR})
+    find_program(RUBY_EXECUTABLE ruby REQUIRED)
+    add_custom_command(
+        OUTPUT ${THUMB_GEN_DIR}/6502_asm.inl ${THUMB_GEN_DIR}/6502_c.inl
+        DEPENDS ${THUMB_DIR}/gen/gen_asm.rb
+        WORKING_DIRECTORY ${THUMB_DIR}
+        COMMAND ${RUBY_EXECUTABLE} gen/gen_asm.rb
+                ${THUMB_GEN_DIR}/6502_asm.inl ${THUMB_GEN_DIR}/6502_c.inl
+        COMMENT "Generating thumb_cpu 6502 tables"
+        VERBATIM
+    )
+    set(CPU_SOURCES
+        ${THUMB_DIR}/src/cpu/cpu.c
+        ${THUMB_DIR}/src/cpu/cpu_asm.S
+        ${THUMB_DIR}/src/cpu_mem.c
+        ${THUMB_DIR}/src/adapter.c
+        ${THUMB_GEN_DIR}/6502_asm.inl
+        ${THUMB_GEN_DIR}/6502_c.inl
+    )
+else()
+    set(CPU_SOURCES ${BEM_DIR}/6502.c)
+endif()
+
 set(BBC_ENGINE
+    # 6502 CPU (thumb asm + hw_event, or portable C interpreter)
+    ${CPU_SOURCES}
     # b-em core (subset; unused features compiled out via NO_USE_* guards)
-    ${BEM_DIR}/6502.c
     ${BEM_DIR}/acia.c
     ${BEM_DIR}/adc.c
     ${BEM_DIR}/cmos.c
@@ -283,6 +315,7 @@ target_include_directories(frank-micro PRIVATE
     src/bem/pico/stub_allegro5/include
     src/bem/pico/roms
     src/bem/thumb_cpu/src
+    src/bem/thumb_cpu/src/cpu
     drivers
     drivers/pwm_audio
     drivers/fatfs
@@ -334,6 +367,19 @@ target_compile_definitions(frank-micro PRIVATE
     NO_USE_KEY_LOOKUP NO_USE_DISC_WRITE SHORTCIRCUIT_KEYBOARD_POLL
     PIOC_PRINTF_SUPPORT_FLOAT=0 PIOC_PRINTF_SUPPORT_LONG_LONG=0
 )
+
+if(USE_THUMB_CPU)
+    # Thumb-assembly 6502 + event-driven hardware scheduler.
+    target_compile_definitions(frank-micro PRIVATE
+        USE_PICO_CPU
+        USE_HW_EVENT
+        THUMB_CPU_BEEB
+        THUMB_CPU_USE_ASM=1
+        CPU_ASM_INLINE_BREAKOUT
+    )
+    target_include_directories(frank-micro PRIVATE ${THUMB_GEN_DIR})
+    target_link_libraries(frank-micro hardware_interp)
+endif()
 
 if(HDMI_DRIVER STREQUAL "HDMI_PIO_AUDIO")
     target_compile_definitions(frank-micro PRIVATE HDMI_PIO_AUDIO=1)
