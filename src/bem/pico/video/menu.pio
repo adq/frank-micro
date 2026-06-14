@@ -1,0 +1,24 @@
+/*
+ * B-em Pico version (C) 2021 Graham Sanderson
+ */
+; this draws either a color pixel or nothing at half frequency
+; based on 1bpp mask data passed in the command.
+; there is an implicit blank pixel at the start
+
+.program masked_run_aligned ; || color | count - 1 || (masked_data ||)+
+begin:
+    out isr, 16
+    out y, 16
+pixel:
+    out x, 1
+    jmp x-- on
+public delay1:
+    set pins, 0
+    jmp y-- pixel
+    out pc, 16
+on:
+public delay2:
+    mov pins, isr
+off:
+    jmp y-- pixel
+    out pc, 16

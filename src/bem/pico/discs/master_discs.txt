@@ -1,0 +1,21 @@
+# # at start of line (only) means comment
+# discs are defined by "display_name = path"
+# > at start of line means default disc, e.g. ">2048 = Disc110-2048.ssd"
+# ! at start of line is directive;
+# !path sets base path for relative filenames
+# !include includes another file
+# !include_if includes another file if it exists
+# !replace ignores includes another file and ignores the rest of this file
+# !replace_if includes another file if it exists, and if so ignores the rest of this file
+
+# if master_discs_user.txt exists, use that instead
+!replace_if master_discs_user.txt
+
+2048 = Disc110-2048.ssd
+# NOTE bitshifters demo freely available here: https://bitshifters.github.io/
+Bad Apple = bs-badappl.dsd
+BeebStep = beebstep.ssd
+NICCC Demo = bs-beeb-niccc.dsd
+Patarty = bs-patarty.ssd
+> Twisted Brain = bs-twisted.ssd
+WaveRunner = bs-wave-runner-v1-1.ssd

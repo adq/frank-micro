@@ -1,0 +1,13 @@
+# # at start of line (only) means comment
+# discs are defined by "display_name = path"
+# > at start of line means default disc, e.g. ">2048 = Disc110-2048.ssd"
+# ! at start of line is directive;
+# !path sets base path for relative filenames
+# !include includes another file
+# !include_if includes another file if it exists
+# !replace ignores includes another file and ignores the rest of this file
+# !replace_if includes another file if it exists, and if so ignores the rest of this file
+
+!path ../../../roms
+
+mos320 = os/mos320.rom
