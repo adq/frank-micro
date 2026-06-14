@@ -47,19 +47,38 @@
 extern int _al_mangled_main(int argc, char **argv);
 
 /*
- * Emulation-speed measurement.  al_wait_for_event() calls this exactly once
- * per emulated 50Hz frame (each m6502_exec runs 40000 cycles == 20ms of BBC
- * time).  Every wall-clock second we print the emulated frame rate; 50.0 fps
- * == 100% real-time.  We also report the HDMI encoder heartbeat so display
- * liveness can be confirmed independently.
+ * Per-frame pacing + speed measurement.  al_wait_for_event() calls this
+ * exactly once per emulated 50Hz frame (each m6502_exec runs 40000 cycles ==
+ * 20ms of BBC time).  We sleep until the next 20ms wall-clock boundary so the
+ * emulator runs at exactly real-time (the asm CPU is faster than real-time at
+ * 252MHz, so without this it would run ~6% fast).  Every wall-clock second we
+ * also print the achieved frame rate and HDMI encoder heartbeat.
  */
+#define FRAME_PERIOD_US 20000u   /* 50 Hz */
+
 void frank_perf_tick(void) {
     static uint32_t frames = 0;
     static uint64_t t_last = 0;
-    frames++;
+    static uint64_t next_frame = 0;
+
+    /* ── 50 Hz pacer ─────────────────────────────────────────────────────── */
     uint64_t now = time_us_64();
-    if (t_last == 0) { t_last = now; return; }
-    uint64_t dt = now - t_last;
+    if (next_frame == 0) {
+        next_frame = now + FRAME_PERIOD_US;
+    } else {
+        if ((int64_t)(next_frame - now) > 0)
+            busy_wait_until(from_us_since_boot(next_frame));
+        next_frame += FRAME_PERIOD_US;
+        /* Resync if we've fallen far behind (e.g. a slow frame). */
+        now = time_us_64();
+        if ((int64_t)(now - next_frame) > (int64_t)FRAME_PERIOD_US)
+            next_frame = now + FRAME_PERIOD_US;
+    }
+
+    /* ── speed measurement ───────────────────────────────────────────────── */
+    frames++;
+    if (t_last == 0) { t_last = time_us_64(); return; }
+    uint64_t dt = time_us_64() - t_last;
     if (dt >= 1000000u) {
         float fps = frames * 1000000.0f / (float)dt;
         float pct = fps * 100.0f / 50.0f;  /* BBC frame rate is 50 Hz */
@@ -75,7 +94,7 @@ void frank_perf_tick(void) {
         printf("PERF: emu=%.1f fps (%.0f%% real-time)\n", (double)fps, (double)pct);
 #endif
         frames = 0;
-        t_last = now;
+        t_last = time_us_64();
     }
 }
 

@@ -352,6 +352,7 @@ target_compile_definitions(frank-micro PRIVATE
     X_GUI                 # use x_gui.h raw 16bpp row abstraction (not scanvideo)
     SINGLE_CORE           # core1 is the frank HDMI encoder; no core1 video
     FRANK_MAIN            # disable al_stub main(); frank provides main()
+    MODEL_MASTER          # boot as BBC Master 128 by default
     NO_USE_KEYCODE_MAP
     # feature trims (match kilograham pico defaults)
     NO_USE_TUBE NO_USE_DEBUGGER NO_USE_SID NO_USE_SAVE_STATE NO_USE_VDFS
