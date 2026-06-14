@@ -1,4 +1,5 @@
 /* Auto-generated embedded ROMs for frank-micro (b-em). */
+#include "b-em.h"
 #include "roms.h"
 
 static const uint8_t rom_os12[16384] __attribute__((aligned(4))) = {

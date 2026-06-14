@@ -405,6 +405,15 @@ enum {
 
 #define al_init()    (al_install_system(0, NULL))
 
+/* frank: allegro memory wrappers map straight to libc. */
+#include <stdlib.h>
+#ifndef al_malloc
+#define al_malloc(n)      malloc(n)
+#define al_free(p)        free(p)
+#define al_calloc(c, n)   calloc((c), (n))
+#define al_realloc(p, n)  realloc((p), (n))
+#endif
+
 #if !PICO_NO_HARDWARE
 typedef	int64_t	time_t;
 static inline time_t time(time_t *tsec) {

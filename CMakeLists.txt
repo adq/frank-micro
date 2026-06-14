@@ -196,93 +196,72 @@ endif()
 set_source_files_properties(drivers/dlmalloc.c PROPERTIES COMPILE_DEFINITIONS
     "ONLY_MSPACES=1;HAVE_MMAP=0;HAVE_MORECORE=0;NO_MALLOC_STATS=1;USE_LOCKS=0;ABORT_ON_ASSERT_FAILURE=0;MALLOC_FAILURE_ACTION=;LACKS_SYS_MMAN_H=1;LACKS_UNISTD_H=1;LACKS_SYS_PARAM_H=1")
 
-# ── BBC Micro (beebjit) engine sources ─────────────────────────────────────
-set(BEEBJIT_DIR ${CMAKE_CURRENT_SOURCE_DIR}/src/micro)
+# ── BBC Micro (b-em) engine sources ────────────────────────────────────────
+set(BEM_DIR ${CMAKE_CURRENT_SOURCE_DIR}/src/bem)
 
 set(BBC_ENGINE
-    # Core BBC hardware
-    ${BEEBJIT_DIR}/bbc.c
-    ${BEEBJIT_DIR}/config.c
-    ${BEEBJIT_DIR}/cmos.c
-    # 6502 CPU — interpreter only (no JIT)
-    ${BEEBJIT_DIR}/cpu_driver.c
-    ${BEEBJIT_DIR}/interp.c
-    ${BEEBJIT_DIR}/defs_6502.c
-    ${BEEBJIT_DIR}/state_6502.c
-    # Hardware subsystems
-    ${BEEBJIT_DIR}/via.c
-    ${BEEBJIT_DIR}/sound.c
-    ${BEEBJIT_DIR}/video.c
-    ${BEEBJIT_DIR}/teletext.c
-    ${BEEBJIT_DIR}/keyboard.c
-    ${BEEBJIT_DIR}/joystick.c
-    ${BEEBJIT_DIR}/adc.c
-    ${BEEBJIT_DIR}/timing.c
-    ${BEEBJIT_DIR}/mc6850.c
-    ${BEEBJIT_DIR}/serial_ula.c
-    # Disk subsystems
-    ${BEEBJIT_DIR}/disc.c
-    ${BEEBJIT_DIR}/disc_drive.c
-    ${BEEBJIT_DIR}/disc_ssd.c
-    ${BEEBJIT_DIR}/disc_adl.c
-    ${BEEBJIT_DIR}/disc_hfe.c
-    ${BEEBJIT_DIR}/disc_tool.c
-    ${BEEBJIT_DIR}/ibm_disc_format.c
-    ${BEEBJIT_DIR}/intel_fdc.c
-    ${BEEBJIT_DIR}/wd_fdc.c
-    # Tape
-    ${BEEBJIT_DIR}/tape.c
-    ${BEEBJIT_DIR}/tape_uef.c
-    ${BEEBJIT_DIR}/tape_csw.c
-    # Utilities
-    ${BEEBJIT_DIR}/log.c
-    ${BEEBJIT_DIR}/util.c
-    ${BEEBJIT_DIR}/util_string.c
-    ${BEEBJIT_DIR}/util_container.c
-    ${BEEBJIT_DIR}/expression.c
-    ${BEEBJIT_DIR}/miniz.c
-    ${BEEBJIT_DIR}/asm/asm_abi.c
-    ${BEEBJIT_DIR}/asm/asm_tables.c
-    ${BEEBJIT_DIR}/asm/asm_util.c
-    ${BEEBJIT_DIR}/asm/asm_common.c
-    ${BEEBJIT_DIR}/asm/asm_jit.c
-    ${BEEBJIT_DIR}/asm/asm_inturbo.c
+    # b-em core (subset; unused features compiled out via NO_USE_* guards)
+    ${BEM_DIR}/6502.c
+    ${BEM_DIR}/acia.c
+    ${BEM_DIR}/adc.c
+    ${BEM_DIR}/cmos.c
+    ${BEM_DIR}/compactcmos.c
+    ${BEM_DIR}/compact_joystick.c
+    ${BEM_DIR}/compat_wrappers.c
+    ${BEM_DIR}/config.c
+    ${BEM_DIR}/csw.c
+    ${BEM_DIR}/ddnoise.c
+    ${BEM_DIR}/disc.c
+    ${BEM_DIR}/fdi.c
+    ${BEM_DIR}/fdi2raw.c
+    ${BEM_DIR}/i8271.c
+    ${BEM_DIR}/ide.c
+    ${BEM_DIR}/joystick.c
+    ${BEM_DIR}/keyboard.c
+    ${BEM_DIR}/logging.c
+    ${BEM_DIR}/main.c
+    ${BEM_DIR}/mem.c
+    ${BEM_DIR}/model.c
+    ${BEM_DIR}/mouse.c
+    ${BEM_DIR}/music2000.c
+    ${BEM_DIR}/music4000.c
+    ${BEM_DIR}/music5000.c
+    ${BEM_DIR}/pal.c
+    ${BEM_DIR}/scsi.c
+    ${BEM_DIR}/sdf-acc.c
+    ${BEM_DIR}/sdf-geo.c
+    ${BEM_DIR}/serial.c
+    ${BEM_DIR}/sn76489.c
+    ${BEM_DIR}/sysacia.c
+    ${BEM_DIR}/sysvia.c
+    ${BEM_DIR}/tape.c
+    ${BEM_DIR}/tapenoise.c
+    ${BEM_DIR}/uef.c
+    ${BEM_DIR}/uservia.c
+    ${BEM_DIR}/via.c
+    ${BEM_DIR}/wd1770.c
+    ${BEM_DIR}/win.c
+    # linux.c omitted: host filesystem helpers not used on pico
+    # pico glue: CRTC/ULA timing + rasteriser (X_GUI raw-row path)
+    ${BEM_DIR}/pico/video/video.c
+    ${BEM_DIR}/pico/video/display.c
+    ${BEM_DIR}/pico/video/pixels.S
+    ${BEM_DIR}/pico/video/gui_stub.c
+    ${BEM_DIR}/pico/audio/audio.c
+    ${BEM_DIR}/pico/stub_allegro5/al_stub.cpp
+    # embedded ROMs (Model B: os12, basic2, dfs226)
+    ${BEM_DIR}/pico/roms/embedded_roms.c
 )
 
-# ── JIT stubs (null implementations so link succeeds) ──────────────────────
-set(JIT_STUBS
-    src/Pico/jit_stub.c
-)
+set(JIT_STUBS)
 
-# ── Pico port layer ─────────────────────────────────────────────────────────
+# ── frank port layer (b-em glue) ────────────────────────────────────────────
 set(PICO_PORT
-    src/Pico/main.c
-    src/Pico/platform.c
-    src/Pico/pico_render.c
-    src/Pico/micro_boot.c
-    src/Pico/micro_settings.c
-    src/Pico/micro_loader.c
-    src/Pico/micro_ui.c
-    src/Pico/micro_serial_console.c
-    src/Pico/micro_keys.c
-    src/Pico/ui_draw.c
-    src/Pico/ui_font.c
-    # OS abstraction stubs
-    src/Pico/os_alloc_pico.c
-    src/Pico/os_thread_pico.c
-    src/Pico/os_channel_pico.c
-    src/Pico/os_lock_pico.c
-    src/Pico/os_time_pico.c
-    src/Pico/os_sound_pico.c
-    src/Pico/os_window_pico.c
-    src/Pico/os_terminal_pico.c
-    src/Pico/os_poller_pico.c
-    src/Pico/os_fault_pico.c
-    # Pico replacements for platform-specific beebjit modules
-    src/Pico/debug_pico.c
-    src/Pico/state_pico.c
-    src/Pico/util_file_pico.c
-    src/Pico/disc_stub.c
+    src/frank/frank_platform.c   # main(), board/clock/SD init, run loop
+    src/frank/frank_gui.c        # x_gui_* hooks: 16bpp rows -> 8bpp HDMI fb
+    src/frank/frank_keyboard.c   # PS/2 -> b-em key matrix
+    src/frank/frank_audio.c      # sn76489 -> frank HDMI audio ring
+    src/frank/frank_stubs.c      # host-symbol stubs (midi, wav, garbage mem)
 )
 
 add_executable(frank-micro
@@ -293,8 +272,17 @@ add_executable(frank-micro
 
 target_include_directories(frank-micro PRIVATE
     src
-    src/micro
     src/Pico
+    src/frank
+    src/frank/vendor
+    src/bem
+    src/bem/pico
+    src/bem/pico/video
+    src/bem/pico/audio
+    src/bem/pico/x_gui
+    src/bem/pico/stub_allegro5/include
+    src/bem/pico/roms
+    src/bem/thumb_cpu/src
     drivers
     drivers/pwm_audio
     drivers/fatfs
@@ -323,6 +311,28 @@ target_compile_definitions(frank-micro PRIVATE
     SDCARD_PIN_SPI0_SCK=${SD_SCK}
     SDCARD_PIN_SPI0_MOSI=${SD_MOSI}
     SDCARD_PIN_SPI0_MISO=${SD_MISO}
+    # ── b-em build config ───────────────────────────────────────────────
+    BEM
+    USE_MEMORY_POINTER
+    HAVE_STPCPY
+    VERSION=\"frank-micro\"
+    X_GUI                 # use x_gui.h raw 16bpp row abstraction (not scanvideo)
+    SINGLE_CORE           # core1 is the frank HDMI encoder; no core1 video
+    FRANK_MAIN            # disable al_stub main(); frank provides main()
+    NO_USE_KEYCODE_MAP
+    # feature trims (match kilograham pico defaults)
+    NO_USE_TUBE NO_USE_DEBUGGER NO_USE_SID NO_USE_SAVE_STATE NO_USE_VDFS
+    NO_USE_UEF NO_USE_CSW NO_USE_MMB NO_USE_IDE NO_USE_ADC NO_USE_MOUSE
+    NO_USE_MUSIC5000 NO_USE_SCSI NO_USE_FDI NO_USE_I8271 NO_USE_ALLEGRO_GUI
+    NO_USE_JOYSTICK NO_USE_PAL NO_USE_COMPACT NO_USE_CMD_LINE
+    NO_USE_SOUND_FILTER NO_USE_SET_SPEED NO_USE_NULA_ATTRIBUTE
+    NO_USE_NULA_PIXEL_HSCROLL NO_USE_DD_NOISE NO_USE_WRITABLE_CONFIG
+    NO_USE_CLOSE NO_USE_CMOS_SAVE NO_USE_RAM_ROMS NO_USE_MIDI
+    # rasteriser options (match kilograham)
+    TILE8 MODE7_TILE8 USE_CRTC0_0_OPTIMIZATION LOOK_MA_NO_MA
+    USE_MEM_DDNOISE USE_DDNOISE_8
+    NO_USE_KEY_LOOKUP NO_USE_DISC_WRITE SHORTCIRCUIT_KEYBOARD_POLL
+    PIOC_PRINTF_SUPPORT_FLOAT=0 PIOC_PRINTF_SUPPORT_LONG_LONG=0
 )
 
 if(HDMI_DRIVER STREQUAL "HDMI_PIO_AUDIO")
@@ -351,8 +361,7 @@ target_compile_options(frank-micro PRIVATE
     -Wno-parentheses
 )
 
-# miniz is optimised separately - it's safe for O2
-set_source_files_properties(${BEEBJIT_DIR}/miniz.c PROPERTIES COMPILE_OPTIONS "-O2;-DMINIZ_NO_STDIO=1;-DMINIZ_NO_TIME=1")
+# b-em sources include C++ (al_stub) — already enabled at project() level.
 
 target_link_libraries(frank-micro
     pico_stdlib

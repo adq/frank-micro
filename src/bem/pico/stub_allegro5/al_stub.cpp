@@ -36,6 +36,8 @@
 
 #include "main.h"
 
+extern "C" void frank_keyboard_poll(void);
+
 #ifdef NO_USE_KEYCODE_MAP
 static const uint8_t sdl_to_allegro_keycodes[232] = {
     0, 0, 0, 0, 1, 2, 3, 4,
@@ -96,6 +98,7 @@ void setup_clock() {
 #include "keycode_to_allegro.h"
 #endif
 
+#ifndef FRANK_MAIN
 extern "C" int main(int argc, char **argv) {
 #if X_GUI
     x_gui_init();
@@ -132,6 +135,7 @@ extern "C" int main(int argc, char **argv) {
 #endif
     return _al_mangled_main(argc, argv);
 }
+#endif /* FRANK_MAIN */
 
 #include <allegro5/allegro.h>
 
@@ -632,6 +636,8 @@ void al_wait_for_event(ALLEGRO_EVENT_QUEUE *,
         handle_scancode(kbe.down, kbe.scancode);
     }
 #endif
+    /* frank: poll the PS/2 keyboard and feed events to b-em. */
+    frank_keyboard_poll();
 #define KEY_TIMEOUT 50
     if (uart_is_readable(uart_default)) {
         char c = uart_getc(uart_default);

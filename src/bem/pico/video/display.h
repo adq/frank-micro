@@ -15,7 +15,9 @@ extern "C" {
 
 extern void set_intern_dtype(enum vid_disptype dtype);
 
-#if PICO_ON_DEVICE
+/* frank-micro: X_GUI raw-row path renders synchronously on core0, so do NOT
+ * enable the core1 record/replay scanvideo wire even on device. */
+#if PICO_ON_DEVICE && !defined(X_GUI)
 #define DISPLAY_WIRE
 #endif
 
