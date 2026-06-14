@@ -46,6 +46,39 @@
 /* b-em entry point (main.c: #define main _al_mangled_main). */
 extern int _al_mangled_main(int argc, char **argv);
 
+/*
+ * Emulation-speed measurement.  al_wait_for_event() calls this exactly once
+ * per emulated 50Hz frame (each m6502_exec runs 40000 cycles == 20ms of BBC
+ * time).  Every wall-clock second we print the emulated frame rate; 50.0 fps
+ * == 100% real-time.  We also report the HDMI encoder heartbeat so display
+ * liveness can be confirmed independently.
+ */
+void frank_perf_tick(void) {
+    static uint32_t frames = 0;
+    static uint64_t t_last = 0;
+    frames++;
+    uint64_t now = time_us_64();
+    if (t_last == 0) { t_last = now; return; }
+    uint64_t dt = now - t_last;
+    if (dt >= 1000000u) {
+        float fps = frames * 1000000.0f / (float)dt;
+        float pct = fps * 100.0f / 50.0f;  /* BBC frame rate is 50 Hz */
+#if defined(HDMI_PIO_AUDIO)
+        extern volatile uint32_t frank_hdmi_heartbeat_frames;
+        static uint32_t hdmi_last = 0;
+        uint32_t hdmi_now = frank_hdmi_heartbeat_frames;
+        uint32_t hdmi_fps = hdmi_now - hdmi_last;
+        hdmi_last = hdmi_now;
+        printf("PERF: emu=%.1f fps (%.0f%% real-time)  hdmi=%lu fps\n",
+               (double)fps, (double)pct, (unsigned long)hdmi_fps);
+#else
+        printf("PERF: emu=%.1f fps (%.0f%% real-time)\n", (double)fps, (double)pct);
+#endif
+        frames = 0;
+        t_last = now;
+    }
+}
+
 /* ── Flash timing for overclocked operation ─────────────────────────────── */
 static void __no_inline_not_in_flash_func(set_flash_timings)(int cpu_mhz, int flash_max_mhz) {
     const int clock_hz  = cpu_mhz * 1000000;
@@ -72,7 +105,6 @@ static void install_palette(void) {
 
 int main(void) {
     frank_enable_fpu();
-
 #if CPU_CLOCK_MHZ > 252
     vreg_disable_voltage_limit();
     vreg_set_voltage(CPU_VOLTAGE);
