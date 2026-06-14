@@ -37,6 +37,7 @@
 
 #include "frank_gui.h"
 #include "frank_disc.h"
+#include "frank_console.h"
 
 #ifndef FRANK_MICRO_VERSION
 #define FRANK_MICRO_VERSION "dev"
@@ -44,6 +45,13 @@
 
 #define FB_W 320
 #define FB_H 256
+
+/* Crash diagnostics mirror (populated by crash_handler_check_and_print;
+ * readable via the debug probe even when USB-CDC serial misses the print). */
+volatile uint32_t g_crash_fault = 0;
+volatile uint32_t g_crash_pc    = 0;
+volatile uint32_t g_crash_cfsr  = 0;
+volatile uint32_t g_crash_count = 0;
 
 /* b-em entry point (main.c: #define main _al_mangled_main). */
 extern int _al_mangled_main(int argc, char **argv);
@@ -68,6 +76,9 @@ void frank_perf_tick(void) {
     extern void frank_disc_autoboot_tick(void);
     frank_disc_autoboot_tick();
 #endif
+
+    /* Poll the USB-CDC serial console for injected keystrokes. */
+    frank_console_poll();
 
     /* Feed the watchdog so a genuine hang (not a fault) is detected/rebooted. */
     crash_handler_feed();

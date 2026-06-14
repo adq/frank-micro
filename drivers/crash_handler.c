@@ -94,6 +94,7 @@ crash_save_and_reboot(uint32_t fault_num, uint32_t *frame) {
 FAULT_ENTRY(crash_hardfault,  3)
 FAULT_ENTRY(crash_memmanage,  4)
 FAULT_ENTRY(crash_busfault,   5)
+FAULT_ENTRY(crash_usagefault, 6)
 
 /* ------------------------------------------------------------------ */
 /* Public API                                                         */
@@ -106,11 +107,13 @@ void crash_handler_install(void) {
     scb_hw->cfsr  = 0xFFFFFFFFu;   /* W1C: clear all fault status bits */
     scb_hw->hfsr  = 0xFFFFFFFFu;   /* W1C: clear HardFault status      */
     scb_hw->shcsr |= (1u << 16)   /* MEMFAULTENA  */
-                    | (1u << 17);  /* BUSFAULTENA  */
+                    | (1u << 17)  /* BUSFAULTENA  */
+                    | (1u << 18); /* USGFAULTENA  */
 
     exception_set_exclusive_handler(HARDFAULT_EXCEPTION,  crash_hardfault);
     exception_set_exclusive_handler(MEMMANAGE_EXCEPTION,  crash_memmanage);
     exception_set_exclusive_handler(BUSFAULT_EXCEPTION,   crash_busfault);
+    exception_set_exclusive_handler(USAGEFAULT_EXCEPTION, crash_usagefault);
 
     /* Start a watchdog timer to catch hangs (not just faults).
      * Must be fed periodically via crash_handler_feed().
@@ -130,6 +133,11 @@ void crash_handler_check_and_print(void) {
     uint32_t magic = watchdog_hw->scratch[0];
     if (magic != CRASH_MAGIC && magic != HANG_MAGIC) return;
 
+    /* Mirror the decoded crash into RAM so it can be recovered via the debug
+     * probe even if USB-CDC serial misses the one-shot print. */
+    extern volatile uint32_t g_crash_fault, g_crash_pc, g_crash_cfsr, g_crash_count;
+    g_crash_count++;
+
     if (magic == HANG_MAGIC) {
         printf("\n!!! PREVIOUS HANG DETECTED !!!\n");
         printf("  Watchdog timeout — system was unresponsive\n");
@@ -140,12 +148,14 @@ void crash_handler_check_and_print(void) {
         uint32_t bfar_hi = raw1 & 0xFFFF0000u;
         uint32_t pc     = watchdog_hw->scratch[2];
         uint32_t cfsr   = watchdog_hw->scratch[3];
+        g_crash_fault = fault; g_crash_pc = pc; g_crash_cfsr = cfsr;
 
         const char *name;
         switch (fault) {
             case 3:  name = "HardFault";  break;
             case 4:  name = "MemManage";  break;
             case 5:  name = "BusFault";   break;
+            case 6:  name = "UsageFault"; break;
             default: name = "Unknown";    break;
         }
 

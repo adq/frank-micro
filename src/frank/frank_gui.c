@@ -32,7 +32,21 @@ volatile uint32_t current_buffer = 0;
 static uint16_t row_work0[640];
 static uint16_t row_work1[640];
 static struct scanvideo_scanline_buffer s_buffer;
-static int s_scanline_number;
+
+/*
+ * Frame/scanline bookkeeping, faithfully matching the upstream x_gui:
+ *   - scanline_number counts begin_scanline() calls 1..256 within a frame.
+ *   - frame_number_part increments by 0x10000 at the start of each frame.
+ *   - scanline_id = frame_number_part | scanline_number.
+ * display.c's per-line catch-up logic uses scanvideo_frame_number(scanline_id)
+ * to detect a new frame and scanvideo_scanline_number() for the line position,
+ * padding each frame to exactly 256 emitted scanlines.  Encoding the frame
+ * number is essential: without it, when a program reprograms the CRTC (e.g.
+ * the Prince of Persia cut scenes) the scanline accounting desyncs and the
+ * frame never completes, freezing the display while the CPU keeps running.
+ */
+static int      s_scanline_number;     /* 0..256 within the current frame */
+static uint32_t s_frame_number_part;   /* high 16 bits of scanline_id      */
 
 /*
  * Map an RGB555 pixel to a BBC physical-colour index 0..7.
@@ -62,13 +76,14 @@ int x_gui_init(void) {
 
 /* display.c sets buffer->double_height before each scanline in teletext. */
 struct scanvideo_scanline_buffer *x_gui_begin_scanline(void) {
-    if (s_scanline_number == 0) {
-        /* Start of a new frame: draw into the back buffer. */
+    if (s_scanline_number++ == 0) {
+        /* Start of a new frame: draw into the back buffer, bump frame number. */
         current_buffer ^= 1u;
+        s_frame_number_part += 0x10000u;
     }
     s_buffer.row0 = row_work0;
     s_buffer.row1 = s_buffer.double_height ? row_work1 : NULL;
-    s_buffer.scanline_id = s_scanline_number;
+    s_buffer.scanline_id = s_frame_number_part | (uint32_t)s_scanline_number;
     /* Clear the work row so undriven pixels are black. */
     memset(row_work0, 0, sizeof(row_work0));
     if (s_buffer.row1) memset(row_work1, 0, sizeof(row_work1));
@@ -76,9 +91,9 @@ struct scanvideo_scanline_buffer *x_gui_begin_scanline(void) {
 }
 
 void x_gui_end_scanline(struct scanvideo_scanline_buffer *buffer) {
-    int y = s_scanline_number;
-    blit_row(buffer->row0, y);
-    s_scanline_number++;
+    /* scanline_number is 1-based here (post-increment in begin); the row index
+     * on screen is scanline_number-1. */
+    blit_row(buffer->row0, s_scanline_number - 1);
     if (s_scanline_number >= FB_H) {
         s_scanline_number = 0;
         /* Frame complete — present it to the HDMI encoder. */

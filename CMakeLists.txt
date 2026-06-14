@@ -300,6 +300,7 @@ set(PICO_PORT
     src/frank/frank_audio.c      # sn76489 -> frank HDMI audio ring
     src/frank/frank_stubs.c      # host-symbol stubs (midi, wav, garbage mem)
     src/frank/frank_disc.c       # load SSD from SD card -> b-em disc
+    src/frank/frank_console.c    # USB-serial key injection (headless control)
 )
 
 add_executable(frank-micro
