@@ -119,13 +119,16 @@ extern "C" {
 #define FRANK_HDMI_LOGICAL_HEIGHT 240
 
 /*
- * Audio sample rate declared on the wire (CEA-861 standard rate).
- * The driver itself is rate-agnostic; the producer just calls
- * frank_hdmi_audio_write() at whatever rate it likes.  For minimal
- * drift the producer's actual rate should be close to this value;
- * 0.1 % drift is inaudible.
+ * Audio sample rate declared on the wire.  Standard CEA-861 rates
+ * (32000/44100/48000) carry an exact sample-frequency code; other
+ * rates use sf=0 ("refer to stream header"), which sinks regenerate
+ * from CTS/N.  The producer should call frank_hdmi_audio_write() at
+ * this same rate so the audio ring fill-rate matches the drain-rate.
+ * Override via -DFRANK_HDMI_AUDIO_RATE=<hz> to match the source.
  */
+#ifndef FRANK_HDMI_AUDIO_RATE
 #define FRANK_HDMI_AUDIO_RATE     32000
+#endif
 
 /*
  * Bring up HDMI on the configured pins.  Must be called before

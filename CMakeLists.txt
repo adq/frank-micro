@@ -115,6 +115,10 @@ if(HDMI_DRIVER STREQUAL "HDMI_PIO_AUDIO")
     endif()
     add_subdirectory(frank-hdmi-sound/src)
 
+    # BBC SN76489 emulation produces samples at 2 MHz / 64 = 31250 Hz; match the
+    # HDMI audio clock so the ring fill/drain rates align (no pitch shift/drift).
+    target_compile_definitions(frank_hdmi_sound INTERFACE FRANK_HDMI_AUDIO_RATE=31250)
+
     add_library(drivers
         drivers/HDMI_audio.c
         drivers/HDMI_vga.c
