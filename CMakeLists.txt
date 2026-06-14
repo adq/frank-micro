@@ -280,6 +280,7 @@ set(BBC_ENGINE
     ${BEM_DIR}/pico/video/pixels.S
     ${BEM_DIR}/pico/video/gui_stub.c
     ${BEM_DIR}/pico/audio/audio.c
+    ${BEM_DIR}/pico/sector_read/sector_read.c
     ${BEM_DIR}/pico/stub_allegro5/al_stub.cpp
     # embedded ROMs (Model B: os12, basic2, dfs226)
     ${BEM_DIR}/pico/roms/embedded_roms.c
@@ -294,6 +295,7 @@ set(PICO_PORT
     src/frank/frank_keyboard.c   # PS/2 -> b-em key matrix
     src/frank/frank_audio.c      # sn76489 -> frank HDMI audio ring
     src/frank/frank_stubs.c      # host-symbol stubs (midi, wav, garbage mem)
+    src/frank/frank_disc.c       # load SSD from SD card -> b-em disc
 )
 
 add_executable(frank-micro
@@ -314,6 +316,7 @@ target_include_directories(frank-micro PRIVATE
     src/bem/pico/x_gui
     src/bem/pico/stub_allegro5/include
     src/bem/pico/roms
+    src/bem/pico/sector_read
     src/bem/thumb_cpu/src
     src/bem/thumb_cpu/src/cpu
     drivers
@@ -366,6 +369,9 @@ target_compile_definitions(frank-micro PRIVATE
     TILE8 MODE7_TILE8 USE_CRTC0_0_OPTIMIZATION LOOK_MA_NO_MA
     USE_MEM_DDNOISE USE_DDNOISE_8
     NO_USE_KEY_LOOKUP NO_USE_DISC_WRITE SHORTCIRCUIT_KEYBOARD_POLL
+    USE_SECTOR_READ       # disc images streamed sector-by-sector from SD
+    # -DFRANK_NO_AUTOBOOT=1 to skip the Prince of Persia disc autoboot
+    $<$<BOOL:${FRANK_NO_AUTOBOOT}>:FRANK_NO_AUTOBOOT>
     PIOC_PRINTF_SUPPORT_FLOAT=0 PIOC_PRINTF_SUPPORT_LONG_LONG=0
 )
 

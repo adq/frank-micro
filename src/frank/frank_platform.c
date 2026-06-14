@@ -24,6 +24,7 @@
 #include "hardware/gpio.h"
 
 #include "board_config.h"
+#include "crash_handler.h"
 #include "fpu_enable.h"
 #include "HDMI.h"
 #include "psram_init.h"
@@ -35,6 +36,7 @@
 #endif
 
 #include "frank_gui.h"
+#include "frank_disc.h"
 
 #ifndef FRANK_MICRO_VERSION
 #define FRANK_MICRO_VERSION "dev"
@@ -60,6 +62,15 @@ void frank_perf_tick(void) {
     static uint32_t frames = 0;
     static uint64_t t_last = 0;
     static uint64_t next_frame = 0;
+
+    /* Release the autoboot SHIFT key once the disc has begun booting. */
+#ifndef FRANK_NO_AUTOBOOT
+    extern void frank_disc_autoboot_tick(void);
+    frank_disc_autoboot_tick();
+#endif
+
+    /* Feed the watchdog so a genuine hang (not a fault) is detected/rebooted. */
+    crash_handler_feed();
 
     /* ── 50 Hz pacer ─────────────────────────────────────────────────────── */
     uint64_t now = time_us_64();
@@ -136,11 +147,15 @@ int main(void) {
     stdio_init_all();
     for (int i = 0; i < 6; ++i) sleep_ms(250);  /* USB CDC enumeration */
 
+    crash_handler_check_and_print();   /* report a fault from the previous run */
+
     printf("\n========================================\n");
     printf("  frank-micro — BBC Micro for RP2350 (b-em)\n");
     printf("  version %s\n", FRANK_MICRO_VERSION);
     printf("  cpu=%lu MHz\n", clock_get_hz(clk_sys) / 1000000u);
     printf("========================================\n");
+
+    crash_handler_install();
 
 #ifdef PICO_DEFAULT_LED_PIN
     gpio_init(PICO_DEFAULT_LED_PIN);
@@ -176,6 +191,10 @@ int main(void) {
     static FATFS g_fs;
     FRESULT fr = f_mount(&g_fs, "", 1);
     printf("SD card mount: %s\n", fr == FR_OK ? "OK" : "not mounted");
+
+    /* Read the autoboot disc image while the SD bus is idle (no emulation). */
+    if (fr == FR_OK)
+        frank_disc_preload();
 
     printf("Starting b-em...\n");
     _al_mangled_main(0, NULL);

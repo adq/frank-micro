@@ -805,7 +805,10 @@ void main_setquit(void)
 int main(int argc, char **argv)
 {
     main_init(argc, argv);
-//    key_down(215); // LSHIFT
+#if defined(FRANK_MAIN) && !defined(FRANK_NO_AUTOBOOT)
+    extern void frank_post_init(void);
+    frank_post_init();
+#endif
     main_run();
     main_close();
     return 0;
