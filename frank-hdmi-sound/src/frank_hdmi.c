@@ -104,8 +104,22 @@ static const struct dvi_serialiser_cfg frank_dvi_cfg = {
  * or PSRAM work and stalls Core 1 momentarily. */
 #define N_SCANLINE_BUFS     2
 
-/* CEA-861 N-value for 32 kHz. */
-#define HDMI_AUDIO_N        4096
+/*
+ * HDMI audio Clock-Regeneration N value.  The sink rebuilds the audio
+ * clock from  128*fs = f_pixel * N / CTS , so CTS = f_pixel*N/(128*fs)
+ * must come out (very near) an integer or the regenerated clock drifts
+ * from our actual sample-delivery rate and the sink periodically drops
+ * or repeats a sample (an audible "stop" every few seconds).
+ *
+ * For this board (f_pixel = 25.2 MHz, fs = 31250 Hz) N = 4000 yields
+ * CTS = 25200 EXACTLY (0 ppm error).  The CEA-861 value 4096 (for
+ * 32 kHz) gives CTS = 25804.8 — non-integer — and the old truncating
+ * integer divide rounded it to 25846, regenerating ~31201 Hz: a
+ * ~1570 ppm mismatch that overflowed the sink's audio FIFO and dropped
+ * a chunk every 2-3 seconds.  4000 is within the CEA-861 allowed N
+ * range (128*fs/1500 .. 128*fs/300 = 2667 .. 13333) for fs = 31250.
+ */
+#define HDMI_AUDIO_N        4000
 
 /* Power-of-two size for the data-island ring.  Producers typically
  * push in bursts of one chunk per video frame; the ring needs to
@@ -352,8 +366,14 @@ void frank_hdmi_init(void) {
      */
     set_write_offset(&dvi0.audio_ring, AUDIO_RING_FRAMES >> 1);
 
-    int cts = DVI_TIMING_PRESET.bit_clk_khz * HDMI_AUDIO_N
-            / (FRANK_HDMI_AUDIO_RATE / 100) / 128;
+    /*
+     * Audio data-island setup.  CTS = f_pixel * N / (128 * fs), computed
+     * in 64-bit with round-to-nearest so there is no truncation error.
+     * f_pixel = bit_clk_khz * 100 (Hz).  For N = 4000 this is exactly 25200.
+     */
+    uint64_t pixel_hz = (uint64_t)DVI_TIMING_PRESET.bit_clk_khz * 100u;
+    uint64_t denom    = 128ull * (uint64_t)FRANK_HDMI_AUDIO_RATE;
+    int cts = (int)((pixel_hz * (uint64_t)HDMI_AUDIO_N + denom / 2u) / denom);
     dvi_set_audio_freq(&dvi0, FRANK_HDMI_AUDIO_RATE, cts, HDMI_AUDIO_N);
 
     /*
