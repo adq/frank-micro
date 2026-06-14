@@ -250,10 +250,16 @@ int  __not_in_flash_func(set_audio_sample)(data_packet_t *data_packet, audio_rin
             l = (*audio_sample_ptr).channels[0];
             r = (*audio_sample_ptr).channels[1];
             increase_read_pointer(audio_ring, 1);
+            audio_ring->last_l = l;
+            audio_ring->last_r = r;
         }
         else {
-            l = (int16_t)0;
-            r = (int16_t)0;
+            /* Underflow: the producer (BBC emulation on core 0) briefly fell
+             * behind — e.g. a synchronous SD sector read stalled it.  Repeat
+             * the last sample (DC hold) rather than injecting a zero, which
+             * would be an audible click/dropout. */
+            l = audio_ring->last_l;
+            r = audio_ring->last_r;
         }
 
         const uint8_t vuc = 1; // valid
