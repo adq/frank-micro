@@ -396,6 +396,16 @@ uint32_t frank_hdmi_audio_free(void) {
     return get_write_size(&dvi0.audio_ring, true);
 }
 
+uint32_t frank_hdmi_audio_capacity(void) {
+    return AUDIO_RING_FRAMES;
+}
+
+uint32_t frank_hdmi_audio_fill(void) {
+    uint32_t cap  = AUDIO_RING_FRAMES;
+    uint32_t free = get_write_size(&dvi0.audio_ring, true);
+    return (free <= cap) ? (cap - free) : 0;
+}
+
 uint32_t __not_in_flash_func(frank_hdmi_audio_write)(const int16_t *frames_lr,
                                                      uint32_t num_frames) {
     if (!dvi_is_started(&dvi0)) return 0;

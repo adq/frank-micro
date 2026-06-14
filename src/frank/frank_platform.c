@@ -83,18 +83,50 @@ void frank_perf_tick(void) {
     /* Feed the watchdog so a genuine hang (not a fault) is detected/rebooted. */
     crash_handler_feed();
 
+    /* ── 50 Hz pacer with audio-ring rate lock ───────────────────────────────
+     *
+     * The producer (BBC emulation on core 0) and the HDMI audio consumer
+     * (core 1) run off independent clocks: the producer is paced here against
+     * time_us_64(), the consumer drains the ring at the HDMI audio rate locked
+     * to the TMDS pixel clock.  Even a tiny mismatch makes the ring slowly
+     * drift toward empty (or full) and underflow (or overflow) every few
+     * seconds — heard as a brief recurring stop in the music, even on the
+     * title screen where there is no disc I/O.
+     *
+     * Fix: close the loop.  Each frame we trim the pacing period by a small
+     * proportional term derived from the ring fill, so the emulation runs a
+     * hair faster when the ring is draining and a hair slower when it is
+     * filling.  This locks the average production rate to the consumer's clock
+     * and parks the fill at ~half.  The trim is bounded to a fraction of a
+     * percent, so neither video nor audio pitch is perceptibly affected. */
+    uint32_t period = FRAME_PERIOD_US;
+#if defined(HDMI_PIO_AUDIO)
+    {
+        uint32_t cap  = frank_hdmi_audio_capacity();
+        if (cap) {
+            int target = (int)(cap >> 1);          /* park the ring half-full   */
+            int fill   = (int)frank_hdmi_audio_fill();
+            int err    = target - fill;            /* >0 ⇒ draining ⇒ go faster */
+            int trim   = err / 8;                  /* gentle proportional gain  */
+            if (trim >  200) trim =  200;          /* clamp to ±1% of 20 ms     */
+            if (trim < -200) trim = -200;
+            period = (uint32_t)((int)FRAME_PERIOD_US - trim);
+        }
+    }
+#endif
+
     /* ── 50 Hz pacer ─────────────────────────────────────────────────────── */
     uint64_t now = time_us_64();
     if (next_frame == 0) {
-        next_frame = now + FRAME_PERIOD_US;
+        next_frame = now + period;
     } else {
         if ((int64_t)(next_frame - now) > 0)
             busy_wait_until(from_us_since_boot(next_frame));
-        next_frame += FRAME_PERIOD_US;
+        next_frame += period;
         /* Resync if we've fallen far behind (e.g. a slow frame). */
         now = time_us_64();
         if ((int64_t)(now - next_frame) > (int64_t)FRAME_PERIOD_US)
-            next_frame = now + FRAME_PERIOD_US;
+            next_frame = now + period;
     }
 
     /* ── speed measurement ───────────────────────────────────────────────── */
@@ -110,8 +142,27 @@ void frank_perf_tick(void) {
         uint32_t hdmi_now = frank_hdmi_heartbeat_frames;
         uint32_t hdmi_fps = hdmi_now - hdmi_last;
         hdmi_last = hdmi_now;
-        printf("PERF: emu=%.1f fps (%.0f%% real-time)  hdmi=%lu fps\n",
-               (double)fps, (double)pct, (unsigned long)hdmi_fps);
+        static uint32_t uf_last = 0;
+        uint32_t uf_now  = frank_hdmi_audio_underflows;
+        uint32_t uf_rate = uf_now - uf_last;
+        uf_last = uf_now;
+        extern volatile uint32_t frank_audio_produced, frank_audio_dropped, frank_audio_rate_hz, frank_audio_maxrun, frank_audio_gaps;
+        extern volatile int32_t frank_audio_gapval;
+        static uint32_t prod_last = 0, drop_last = 0;
+        uint32_t prod_now = frank_audio_produced, drop_now = frank_audio_dropped;
+        uint32_t prod_rate = prod_now - prod_last, drop_rate = drop_now - drop_last;
+        prod_last = prod_now; drop_last = drop_now;
+        uint32_t maxrun = frank_audio_maxrun; frank_audio_maxrun = 0;
+        uint32_t gaps = frank_audio_gaps; frank_audio_gaps = 0;
+        printf("PERF: emu=%.1f fps (%.0f%%)  hdmi=%lu  fill=%lu/%lu  "
+               "uf=%lu  prod=%lu/s drop=%lu/s rate=%lu  maxrun=%lu gaps=%lu gapval=%ld\n",
+               (double)fps, (double)pct, (unsigned long)hdmi_fps,
+               (unsigned long)frank_hdmi_audio_fill(),
+               (unsigned long)frank_hdmi_audio_capacity(),
+               (unsigned long)uf_rate,
+               (unsigned long)prod_rate, (unsigned long)drop_rate,
+               (unsigned long)frank_audio_rate_hz,
+               (unsigned long)maxrun, (unsigned long)gaps, (long)frank_audio_gapval);
 #else
         printf("PERF: emu=%.1f fps (%.0f%% real-time)\n", (double)fps, (double)pct);
 #endif

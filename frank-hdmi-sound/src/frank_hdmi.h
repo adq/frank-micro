@@ -179,6 +179,19 @@ uint32_t frank_hdmi_audio_write(const int16_t *frames_lr, uint32_t num_frames);
 /* Free space in the HDMI audio ring, in stereo frames. */
 uint32_t frank_hdmi_audio_free(void);
 
+/* Total capacity of the HDMI audio ring, in stereo frames. */
+uint32_t frank_hdmi_audio_capacity(void);
+
+/* Current occupancy of the HDMI audio ring, in stereo frames. */
+uint32_t frank_hdmi_audio_fill(void);
+
+/*
+ * Count of ring underflows (consumer outran producer).  In steady
+ * state the producer-side rate lock keeps this at zero; a rising
+ * value means audible dropouts.  Volatile read only.
+ */
+extern volatile uint32_t frank_hdmi_audio_underflows;
+
 /*
  * Diagnostic counters bumped by the Core 1 encode loop.  Useful for
  * a heartbeat from Core 0: if frames keeps incrementing at ~60/s the

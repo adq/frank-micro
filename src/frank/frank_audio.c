@@ -22,6 +22,14 @@
 
 bool x_gui_audio_init_failed;
 
+/* Producer-side diagnostics (mono samples produced / dropped on ring-full). */
+volatile uint32_t frank_audio_produced = 0;
+volatile uint32_t frank_audio_dropped  = 0;
+volatile uint32_t frank_audio_rate_hz  = 0;
+volatile uint32_t frank_audio_maxrun   = 0;  /* longest identical-sample run */
+volatile uint32_t frank_audio_gaps     = 0;  /* runs >= 300 samples (~10ms)  */
+volatile int32_t  frank_audio_gapval   = 0;  /* sample value of last gap     */
+
 /* A small mono sample buffer reused each fill (b-em uses one in flight). */
 #define FRANK_AUDIO_SAMPLES 882   /* 1 frame @ ~44.1kHz / 50Hz */
 static int16_t s_mono[FRANK_AUDIO_SAMPLES];
@@ -41,6 +49,7 @@ static struct audio_buffer_pool s_pool;
 
 struct audio_buffer_pool *x_gui_audio_init(uint freq) {
     s_fmt.sample_freq = freq;
+    frank_audio_rate_hz = freq;
     s_fmt.format = AUDIO_BUFFER_FORMAT_PCM_S16;
     s_fmt.channel_count = 1;
     x_gui_audio_init_failed = false;
@@ -66,6 +75,29 @@ void give_audio_buffer(struct audio_buffer_pool *ac, struct audio_buffer *buffer
     uint32_t n = buffer->sample_count;
     static int16_t stereo[256];
 
+    frank_audio_produced += n;
+    /* Gap detector: track the longest run of identical consecutive samples in
+     * the data b-em hands us.  Real BBC audio never holds a value for long; a
+     * long flat run means the producer emitted silence/DC (an audible stop)
+     * — independent of any capture device.  frank_audio_maxrun is the longest
+     * run seen since the PERF reader last cleared it. */
+    {
+        static int16_t prev = 0;
+        static uint32_t run = 0;
+        for (uint32_t k = 0; k < n; k++) {
+            int16_t s = src[k];
+            if (s == prev) {
+                run++;
+                if (run > frank_audio_maxrun) frank_audio_maxrun = run;
+                if (run == 300) {            /* crossed the gap threshold */
+                    frank_audio_gaps++;
+                    frank_audio_gapval = s;
+                }
+            } else {
+                run = 1; prev = s;
+            }
+        }
+    }
     uint32_t i = 0;
     while (i < n) {
         uint32_t chunk = n - i;
@@ -74,7 +106,8 @@ void give_audio_buffer(struct audio_buffer_pool *ac, struct audio_buffer *buffer
             int16_t s = src[i + j];
             stereo[j * 2] = stereo[j * 2 + 1] = s;
         }
-        frank_hdmi_audio_write(stereo, chunk);
+        uint32_t wrote = frank_hdmi_audio_write(stereo, chunk);
+        frank_audio_dropped += (chunk - wrote);
         i += chunk;
     }
 #else
