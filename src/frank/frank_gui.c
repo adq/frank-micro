@@ -61,12 +61,77 @@ static inline uint8_t rgb555_to_bbc(uint16_t p) {
     return (uint8_t)((r >= 16 ? 1 : 0) | (g >= 16 ? 2 : 0) | (b >= 16 ? 4 : 0));
 }
 
-/* Convert a 640-wide RGB555 row into an 8bpp framebuffer row (2:1 downscale). */
-static void blit_row(const uint16_t *src, int y) {
+/* Luminance proxy: brightest channel of an RGB555 pixel (0..31). */
+static inline uint8_t lum5(uint16_t p) {
+    uint8_t r = PICO_SCANVIDEO_R5_FROM_PIXEL(p);
+    uint8_t g = PICO_SCANVIDEO_G5_FROM_PIXEL(p);
+    uint8_t b = PICO_SCANVIDEO_B5_FROM_PIXEL(p);
+    uint8_t m = r > g ? r : g;
+    return m > b ? m : b;
+}
+
+/*
+ * Render one MODE 7 teletext scanline pixel-perfectly.
+ *
+ * The engine emits each 40-column teletext line into a 640-wide row: a fixed
+ * 16 sub-pixels per character (char c → src[c*16 .. c*16+15]).  Those 16
+ * sub-pixels are the engine's interpolation of the 6-column SAA5050 glyph cell
+ * (the original 6 columns doubled to 12, then linearly resampled 12→16).
+ *
+ * Tracing that 12→16 resample shows the six original font columns reappear at
+ * full intensity exactly at sub-pixel offsets {0,2,5,8,11,14}; every other
+ * offset is an interpolated blend (or character-rounding bleed in the other
+ * field).  Sampling only those six points therefore recovers the original
+ * SAA5050 glyph with no blur, giving uniform 1-px stems for every character.
+ * We place the 6 columns 1:1 into the 8-px output cell with a 1-px margin
+ * either side.  Colours come from the sampled pixels, so coloured teletext and
+ * coloured backgrounds are preserved.
+ */
+#define TELETEXT_INK_LUM 16   /* original column is full-on (≈31) or off (0) */
+
+static void blit_row_teletext(const uint16_t *src, uint8_t *dst) {
+    /* Sub-pixel offset of each original glyph column within the 16-wide cell. */
+    static const uint8_t col_off[6] = { 0, 2, 5, 8, 11, 14 };
+
+    for (int c = 0; c < FB_W / 8; c++) {       /* 40 character cells */
+        const uint16_t *cell = src + c * 16;
+        uint8_t *o = dst + c * 8;
+
+        /* Cell background = darkest sampled column (covers coloured bg). */
+        uint16_t bgpx = cell[col_off[0]];
+        uint8_t  bglum = lum5(cell[col_off[0]]);
+        for (int i = 1; i < 6; i++) {
+            uint8_t l = lum5(cell[col_off[i]]);
+            if (l < bglum) { bglum = l; bgpx = cell[col_off[i]]; }
+        }
+        uint8_t bg = rgb555_to_bbc(bgpx);
+
+        o[0] = bg;                              /* left inter-char margin */
+        for (int i = 0; i < 6; i++) {
+            uint16_t px = cell[col_off[i]];
+            o[i + 1] = (lum5(px) >= TELETEXT_INK_LUM && lum5(px) > bglum)
+                       ? rgb555_to_bbc(px) : bg;
+        }
+        o[7] = bg;                              /* right inter-char margin */
+    }
+}
+
+/*
+ * Convert a 640-wide RGB555 row into an 8bpp framebuffer row (2:1 downscale).
+ *
+ * Graphics modes already emit ≤320 distinct, full-on colours into the row, so
+ * point-sampling every other pixel is lossless there (games look sharp).
+ * MODE 7 teletext gets the dedicated crisp renderer above.
+ */
+static void blit_row(const uint16_t *src, int y, bool teletext) {
     if (y < 0 || y >= FB_H) return;
     uint8_t *dst = SCREEN[current_buffer] + y * FB_W;
-    for (int x = 0; x < FB_W; x++)
-        dst[x] = rgb555_to_bbc(src[x * 2]);
+    if (teletext) {
+        blit_row_teletext(src, dst);
+    } else {
+        for (int x = 0; x < FB_W; x++)
+            dst[x] = rgb555_to_bbc(src[x * 2]);
+    }
 }
 
 /* ── x_gui video hooks called from b-em display.c ────────────────────────── */
@@ -93,8 +158,9 @@ struct scanvideo_scanline_buffer *x_gui_begin_scanline(void) {
 
 void x_gui_end_scanline(struct scanvideo_scanline_buffer *buffer) {
     /* scanline_number is 1-based here (post-increment in begin); the row index
-     * on screen is scanline_number-1. */
-    blit_row(buffer->row0, s_scanline_number - 1);
+     * on screen is scanline_number-1.  double_height is set by display.c only
+     * for MODE 7 teletext scanlines, which need the box-filtered downscale. */
+    blit_row(buffer->row0, s_scanline_number - 1, buffer->double_height);
     if (s_scanline_number >= FB_H) {
         s_scanline_number = 0;
         /* Overlay the settings/browser UI onto the freshly-rendered frame. */
