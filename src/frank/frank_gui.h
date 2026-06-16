@@ -20,6 +20,10 @@ extern volatile uint32_t current_buffer;
 /* PS/2 keyboard poll: read pending key events and feed them to b-em. */
 void frank_keyboard_poll(void);
 
+/* Initialise the wired NES/SNES gamepad reader (call once at boot, after the
+ * system clock is set).  Safe to call regardless of USB HID configuration. */
+void frank_gamepad_init(void);
+
 #ifdef __cplusplus
 }
 #endif

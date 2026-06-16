@@ -20,6 +20,7 @@
 #include "HDMI.h"         /* graphics_set_buffer                               */
 
 #include "frank_gui.h"
+#include "frank_ui.h"
 
 /* The 320x256 8-bit framebuffers scanned out by the HDMI encoder. */
 #define FB_W 320
@@ -96,6 +97,9 @@ void x_gui_end_scanline(struct scanvideo_scanline_buffer *buffer) {
     blit_row(buffer->row0, s_scanline_number - 1);
     if (s_scanline_number >= FB_H) {
         s_scanline_number = 0;
+        /* Overlay the settings/browser UI onto the freshly-rendered frame. */
+        if (frank_ui_is_visible())
+            frank_ui_render(SCREEN[current_buffer], FB_W, FB_H);
         /* Frame complete — present it to the HDMI encoder. */
         graphics_set_buffer(SCREEN[current_buffer]);
     }

@@ -38,6 +38,10 @@
 #include "frank_gui.h"
 #include "frank_disc.h"
 #include "frank_console.h"
+#include "frank_settings.h"
+#include "frank_loader.h"
+#include "frank_ui.h"
+#include "usbhid_wrapper.h"   /* usbhid_wrapper_init() — stubs to {} when off */
 
 #ifndef FRANK_MICRO_VERSION
 #define FRANK_MICRO_VERSION "dev"
@@ -70,6 +74,22 @@ void frank_perf_tick(void) {
     static uint32_t frames = 0;
     static uint64_t t_last = 0;
     static uint64_t next_frame = 0;
+    static bool     inited = false;
+
+    /* One-shot init on the first frame, i.e. after b-em's main_init() has run
+     * (so the disc subsystem and config are ready). */
+    if (!inited) {
+        inited = true;
+        frank_settings_apply_live();   /* monitor palette, sound, volume, speed */
+        frank_disk_autoload();         /* mount discs from settings / known names */
+        if (frank_disc_name(0)) {
+            frank_disc_request_boot();  /* SHIFT-BREAK an autoloaded disc */
+        } else {
+#ifndef FRANK_NO_AUTOBOOT
+            frank_disc_preload();       /* fall back to the bundled demo disc */
+#endif
+        }
+    }
 
     /* Release the autoboot SHIFT key once the disc has begun booting. */
 #ifndef FRANK_NO_AUTOBOOT
@@ -77,8 +97,11 @@ void frank_perf_tick(void) {
     frank_disc_autoboot_tick();
 #endif
 
-    /* Poll the USB-CDC serial console for injected keystrokes. */
+    /* Poll the USB-CDC serial console for injected keystrokes.  Disabled when
+     * USB HID is enabled — the native USB port is then a HID host, not CDC. */
+#ifndef USB_HID_ENABLED
     frank_console_poll();
+#endif
 
     /* Feed the watchdog so a genuine hang (not a fault) is detected/rebooted. */
     crash_handler_feed();
@@ -90,9 +113,14 @@ void frank_perf_tick(void) {
      * off independent clocks, but the producer outputs the BBC's 31250 Hz
      * resampled to the consumer's standard 32000 Hz (frank_audio.c), so the
      * average rates match and the primed ring absorbs the jitter — no rate
-     * lock needed (matches the working frank-cpc). */
+     * lock needed (matches the working frank-cpc).
+     *
+     * When "Limit Speed" is Off the pacer is skipped so the emulator runs as
+     * fast as the RP2350 allows (useful for fast loaders). */
     uint64_t now = time_us_64();
-    if (next_frame == 0) {
+    if (!g_frank_limit_speed) {
+        next_frame = 0;   /* re-prime when throttling resumes */
+    } else if (next_frame == 0) {
         next_frame = now + FRAME_PERIOD_US;
     } else {
         if ((int64_t)(next_frame - now) > 0)
@@ -175,7 +203,12 @@ int main(void) {
         set_sys_clock_khz(252 * 1000, true);
 
     stdio_init_all();
+#ifndef USB_HID_ENABLED
+    /* Wait for USB-CDC serial to enumerate so early printf output is visible.
+     * Skipped when USB HID is enabled: the native USB port is in host mode,
+     * there is no CDC device to wait for, and we want input ASAP. */
     for (int i = 0; i < 6; ++i) sleep_ms(250);  /* USB CDC enumeration */
+#endif
 
     crash_handler_check_and_print();   /* report a fault from the previous run */
 
@@ -199,6 +232,17 @@ int main(void) {
     ps2kbd_init();
     printf("PS/2 keyboard ready\n");
 
+    /* USB HID host (keyboard + gamepad).  usbhid_wrapper_init() is a no-op
+     * stub when USB HID is disabled, so this is safe to call unconditionally. */
+    usbhid_wrapper_init();
+#ifdef USB_HID_ENABLED
+    printf("USB HID host ready\n");
+#endif
+
+    /* Wired NES/SNES gamepad (independent of USB HID; always available). */
+    frank_gamepad_init();
+    printf("NES gamepad ready\n");
+
     /* Video: force HDMI output (frank capture-card pipeline). */
 #if defined(HDMI_PIO_AUDIO)
     SELECT_VGA = false;
@@ -209,6 +253,7 @@ int main(void) {
     graphics_set_shift((320 - FB_W) / 2, 0);
     graphics_set_mode(GRAPHICSMODE_DEFAULT);
     install_palette();
+    frank_ui_init();      /* install the overlay palette (indices 240-247) */
     printf("Video initialised (%dx%d)\n", FB_W, FB_H);
 
 #if defined(HDMI_PIO_AUDIO)
@@ -222,9 +267,11 @@ int main(void) {
     FRESULT fr = f_mount(&g_fs, "", 1);
     printf("SD card mount: %s\n", fr == FR_OK ? "OK" : "not mounted");
 
-    /* Read the autoboot disc image while the SD bus is idle (no emulation). */
+    /* Load persisted settings before b-em starts so frank_boot_model() picks
+     * the configured model.  Discs are mounted on the first emulated frame
+     * (frank_perf_tick), once b-em's disc subsystem is initialised. */
     if (fr == FR_OK)
-        frank_disc_preload();
+        frank_settings_load();
 
     printf("Starting b-em...\n");
     _al_mangled_main(0, NULL);

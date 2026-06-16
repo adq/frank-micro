@@ -291,7 +291,12 @@ static void __not_in_flash_func(core1_main)(void) {
 
     dvi_start(&dvi0);
 
-    int logical_y = 0;
+    /* The prefill loop above already queued N_SCANLINE_BUFS buffers filled
+     * with logical_y 0..N-1, so the producer must continue from there.
+     * Restarting at 0 here would leave the producer N lines behind the DVI
+     * consumer, rolling the whole image down by N scanlines (the bottom N
+     * rows wrapping to the top). */
+    int logical_y = N_SCANLINE_BUFS % LOGICAL_H;
     while (1) {
         uint16_t *scanbuf = NULL;
         queue_remove_blocking_u32(&dvi0.q_colour_free, &scanbuf);

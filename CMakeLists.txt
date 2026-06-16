@@ -85,7 +85,13 @@ endif()
 set(HDMI_DRIVER "HDMI_PIO_AUDIO" CACHE STRING "HDMI driver: HDMI_PIO_AUDIO or HDMI_PIO")
 set_property(CACHE HDMI_DRIVER PROPERTY STRINGS "HDMI_PIO_AUDIO" "HDMI_PIO")
 
-message(STATUS "frank-micro  Platform: ${PLATFORM}  CPU: ${CPU_SPEED} MHz  Flash: ${FLASH_SPEED} MHz  Voltage: ${CPU_VOLTAGE}  HDMI: ${HDMI_DRIVER}")
+# Optional USB HID host (keyboard + gamepad).  When enabled, the native USB
+# port is owned by the TinyUSB host stack, so USB-CDC stdio (serial console)
+# and the boot-time USB-enumeration delay are disabled.  Off by default: the
+# native USB port is then used for USB-CDC printf instead (PS/2 only input).
+option(USB_HID_ENABLED "Enable USB HID host (keyboard + gamepad)" OFF)
+
+message(STATUS "frank-micro  Platform: ${PLATFORM}  CPU: ${CPU_SPEED} MHz  Flash: ${FLASH_SPEED} MHz  Voltage: ${CPU_VOLTAGE}  HDMI: ${HDMI_DRIVER}  USB_HID: ${USB_HID_ENABLED}")
 
 include(pico_sdk_import.cmake)
 
@@ -305,6 +311,11 @@ set(PICO_PORT
     src/frank/frank_stubs.c      # host-symbol stubs (midi, wav, garbage mem)
     src/frank/frank_disc.c       # load SSD from SD card -> b-em disc
     src/frank/frank_console.c    # USB-serial key injection (headless control)
+    src/frank/frank_settings.c   # runtime settings store + INI persistence
+    src/frank/frank_loader.c     # SD disc image browser
+    src/frank/frank_ui.c         # F11 media browser + F12 settings overlay
+    src/Pico/ui_draw.c           # 8bpp framebuffer drawing primitives
+    src/Pico/ui_font.c           # 6x8 bitmap font for the overlay
 )
 
 add_executable(frank-micro
@@ -401,6 +412,10 @@ if(HDMI_DRIVER STREQUAL "HDMI_PIO_AUDIO")
     target_compile_definitions(frank-micro PRIVATE HDMI_PIO_AUDIO=1)
 endif()
 
+if(USB_HID_ENABLED)
+    target_include_directories(frank-micro PRIVATE drivers/usbhid)
+endif()
+
 if(PLATFORM STREQUAL "z0")
     target_compile_definitions(frank-micro PRIVATE SDCARD_SPI_BUS=spi1)
     target_link_libraries(frank-micro hardware_spi)
@@ -442,8 +457,20 @@ target_link_libraries(frank-micro
     nespad
 )
 
+if(USB_HID_ENABLED)
+    target_link_libraries(frank-micro usbhid)
+endif()
+
 pico_enable_stdio_uart(frank-micro 0)
-pico_enable_stdio_usb(frank-micro 1)
+
+# Dev builds (USB_HID off) use USB-CDC stdio for printf + the serial console;
+# release builds (USB_HID on) disable it because the USB HID host needs
+# exclusive use of the native USB controller.
+if(USB_HID_ENABLED)
+    pico_enable_stdio_usb(frank-micro 0)
+else()
+    pico_enable_stdio_usb(frank-micro 1)
+endif()
 
 # Never let a printf() to USB-CDC block Core 0: if the host has the port
 # open but is not draining it, the default 500 ms blocking write stalls the

@@ -278,10 +278,40 @@ void al_destroy_path(ALLEGRO_PATH *path) {
 #endif
 #endif
 
-struct {
+struct config_kv {
     const char *key;
     const char *value;
-} config_values[] = {
+};
+
+/* ── frank: two selectable model definitions (runtime switchable) ──────────
+ * model_00 = BBC B with Acorn 1770 DFS, model_01 = BBC Master 128.
+ * Both rely on the ROMs embedded in flash (embedded_roms.c). */
+static const struct config_kv model_00_values[] = {   /* BBC B */
+    {"name",     "BBC B w/1770 FDC"},
+    {"fdc",      "acorn"},
+    {"os",       "os12"},
+    {"tube",     "none"},
+    {"romsetup", "swram"},
+    {"rom15",    "basic2"},
+    {"rom14",    "dfs226"},
+};
+
+static const struct config_kv model_01_values[] = {   /* BBC Master 128 */
+    {"name",     "BBC Master 128"},
+    {"fdc",      "master"},
+    {"65c02",    "true"},
+    {"b+",       "false"},
+    {"master",   "true"},
+    {"modela",   "false"},
+    {"os01",     "false"},
+    {"compact",  "false"},
+    {"os",       "mos320"},
+    {"cmos",     "cmos"},
+    {"tube",     "none"},
+    {"romsetup", "master"},
+};
+
+struct config_kv config_values[] = {
 #ifdef MODEL_MASTER
         {"name", "BBC Master 128"},
         {"fdc", "master"},
@@ -382,25 +412,63 @@ bool al_save_config_file(const char *filename, const ALLEGRO_CONFIG *config) {
     return false;
 }
 
+/* frank: iterate the two model sections (model_00, model_01). The iterator
+ * pointer is (ab)used as a small integer index. */
 char const *al_get_first_config_section(ALLEGRO_CONFIG const *config, ALLEGRO_CONFIG_SECTION **iterator) {
+    *iterator = (ALLEGRO_CONFIG_SECTION *)(intptr_t)1;
     return "model_00";
 }
 
 
 char const *al_get_next_config_section(ALLEGRO_CONFIG_SECTION **iterator) {
+    intptr_t idx = (intptr_t)*iterator;
+    if (idx == 1) {
+        *iterator = (ALLEGRO_CONFIG_SECTION *)(intptr_t)2;
+        return "model_01";
+    }
     return NULL;
 }
+
+extern "C" int frank_boot_model(void);
+extern "C" int frank_boot_kbdips(void);
 
 const char *al_get_config_value(const ALLEGRO_CONFIG *config, const char *section, const char *key) {
 //    printf("al_get_config_value %s %s\n", section, key);
 
     if (!section) {
-        if (!strcmp(key, "model")) return "0";
+        if (!strcmp(key, "model")) {
+            /* Boot model chosen by frank settings (0 = BBC B, 1 = Master). */
+            static char buf[4];
+            snprintf(buf, sizeof(buf), "%d", frank_boot_model());
+            return buf;
+        }
+        if (!strcmp(key, "kbdips")) {
+            /* Keyboard links → power-on screen MODE (frank settings). */
+            static char kbuf[4];
+            snprintf(kbuf, sizeof(kbuf), "%d", frank_boot_kbdips());
+            return kbuf;
+        }
+        /* No other global keys are provided.  Returning NULL here is vital:
+         * get_config_bool()/get_config_string() fall back to the NULL section
+         * when a model-section key is absent, so leaking model defaults (e.g.
+         * "master") here would mis-configure the other model. */
+        return NULL;
     }
-    for (uint i = 0; i < count_of(config_values); i++) {
-        if (!strcmp(config_values[i].key, key))
-            return config_values[i].value;
+
+    /* Per-model section lookup. */
+    const struct config_kv *tbl = NULL;
+    uint n = 0;
+    if (!strcmp(section, "model_00")) { tbl = model_00_values; n = count_of(model_00_values); }
+    else if (!strcmp(section, "model_01")) { tbl = model_01_values; n = count_of(model_01_values); }
+    if (tbl) {
+        for (uint i = 0; i < n; i++)
+            if (!strcmp(tbl[i].key, key))
+                return tbl[i].value;
+        return NULL;
     }
+
+    /* Any other section (sound, video, disc, ...) is unconfigured → use
+     * b-em's built-in defaults. */
     return NULL;
 }
 

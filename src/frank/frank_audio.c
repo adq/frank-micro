@@ -20,6 +20,12 @@
 #include "frank_hdmi.h"
 #endif
 
+#include <stdbool.h>
+
+/* Live volume (0..100) and mute, driven by the settings UI (frank_settings.c). */
+extern volatile int  g_frank_volume;
+extern volatile bool g_frank_sound_on;
+
 bool x_gui_audio_init_failed;
 
 /* A small mono sample buffer reused each fill (b-em uses one in flight). */
@@ -79,8 +85,11 @@ void give_audio_buffer(struct audio_buffer_pool *ac, struct audio_buffer *buffer
     static int16_t  stereo[256];
     uint32_t sc = 0;            /* stereo frames buffered for flush         */
 
+    int vol = g_frank_sound_on ? g_frank_volume : 0;
+    if (vol > 100) vol = 100;
+
     for (uint32_t i = 0; i < n; i++) {
-        int16_t cur = src[i];
+        int16_t cur = (int16_t)(((int32_t)src[i] * vol) / 100);
         while (mu < RESAMP_ONE) {
             int32_t out = prev + (((int32_t)(cur - prev) * (int32_t)mu) >> 16);
             stereo[sc * 2]     = (int16_t)out;
