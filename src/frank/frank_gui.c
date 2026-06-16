@@ -3,7 +3,8 @@
  * frank_gui.c — bridges b-em's X_GUI raw-row video path and audio output
  *               onto the frank HDMI 8-bit palette framebuffer.
  *
- * (c) 2026 Mikhail Matveev <xtreme@rh1.tech>
+ * Copyright (c) 2026 Mikhail Matveev <xtreme@rh1.tech>
+ * https://github.com/rh1tech/frank-micro
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
  * b-em (built with -DX_GUI -DSINGLE_CORE) rasterises each displayed scanline

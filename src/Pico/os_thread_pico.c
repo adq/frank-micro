@@ -13,6 +13,10 @@
  *
  * We keep only the FIRST registration.  After bbc_run_async() returns,
  * main.c calls micro_run_bbc_cpu() to execute the BBC CPU loop on Core 0.
+ *
+ * Copyright (c) 2026 Mikhail Matveev <xtreme@rh1.tech>
+ * https://github.com/rh1tech/frank-micro
+ * SPDX-License-Identifier: GPL-3.0-or-later
  */
 #include "os_thread.h"
 #include <stdlib.h>

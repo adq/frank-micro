@@ -5,6 +5,10 @@
  * See micro_keys.h.  Runs entirely on Core 0 in the BBC CPU thread context
  * (called from micro_keyboard_poll → micro_frame_present at 50 Hz), so the
  * beebjit keyboard_system_key_* calls are thread-safe here.
+ *
+ * Copyright (c) 2026 Mikhail Matveev <xtreme@rh1.tech>
+ * https://github.com/rh1tech/frank-micro
+ * SPDX-License-Identifier: GPL-3.0-or-later
  */
 #include "micro_keys.h"
 #include "keyboard.h"

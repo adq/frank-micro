@@ -11,6 +11,10 @@
  *   CAT [path]             → OK <listing>
  *   STATUS                 → OK ALIVE model=<m>
  *   HELP                   → OK ...
+ *
+ * Copyright (c) 2026 Mikhail Matveev <xtreme@rh1.tech>
+ * https://github.com/rh1tech/frank-micro
+ * SPDX-License-Identifier: GPL-3.0-or-later
  */
 #include "micro_serial_console.h"
 #include "micro_loader.h"

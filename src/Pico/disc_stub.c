@@ -1,6 +1,10 @@
 /*
  * frank-micro — BBC Micro for RP2350
  * disc_stub.c — Stubs for unsupported disc formats.
+ *
+ * Copyright (c) 2026 Mikhail Matveev <xtreme@rh1.tech>
+ * https://github.com/rh1tech/frank-micro
+ * SPDX-License-Identifier: GPL-3.0-or-later
  */
 #include "disc_fsd.h"
 #include "disc_rfi.h"

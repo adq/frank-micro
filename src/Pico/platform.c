@@ -7,6 +7,10 @@
  *    (injected into bbc.c's framebuffer ready callback)
  *  - Bridges PS/2 keyboard to beebjit's keyboard_system_key_pressed/released
  *  - Provides the audio ring buffer push functions for os_sound_pico.c
+ *
+ * Copyright (c) 2026 Mikhail Matveev <xtreme@rh1.tech>
+ * https://github.com/rh1tech/frank-micro
+ * SPDX-License-Identifier: GPL-3.0-or-later
  */
 #include "pico/stdlib.h"
 #include "pico/time.h"

@@ -2,7 +2,8 @@
  * frank-micro — BBC Micro for RP2350 (b-em port)
  * frank_platform.c — board bring-up + entry point.
  *
- * (c) 2026 Mikhail Matveev <xtreme@rh1.tech>
+ * Copyright (c) 2026 Mikhail Matveev <xtreme@rh1.tech>
+ * https://github.com/rh1tech/frank-micro
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
  * Core 0: hardware init, then the b-em emulator (CPU + synchronous video).

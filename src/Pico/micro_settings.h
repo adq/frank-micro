@@ -1,6 +1,10 @@
 /*
  * frank-micro — BBC Micro for RP2350
  * micro_settings.h — Runtime settings.
+ *
+ * Copyright (c) 2026 Mikhail Matveev <xtreme@rh1.tech>
+ * https://github.com/rh1tech/frank-micro
+ * SPDX-License-Identifier: GPL-3.0-or-later
  */
 #ifndef MICRO_SETTINGS_H
 #define MICRO_SETTINGS_H

@@ -6,6 +6,10 @@
  *
  * Model changes require a full BBC restart (model_init + main_reset).
  * Monitor, Sound, Volume and Limit Speed take effect immediately.
+ *
+ * Copyright (c) 2026 Mikhail Matveev <xtreme@rh1.tech>
+ * https://github.com/rh1tech/frank-micro
+ * SPDX-License-Identifier: GPL-3.0-or-later
  */
 #ifndef FRANK_SETTINGS_H
 #define FRANK_SETTINGS_H

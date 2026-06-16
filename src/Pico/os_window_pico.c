@@ -1,6 +1,10 @@
 /*
  * frank-micro — BBC Micro for RP2350
  * os_window_pico.c — Window stub (no GUI window on RP2350).
+ *
+ * Copyright (c) 2026 Mikhail Matveev <xtreme@rh1.tech>
+ * https://github.com/rh1tech/frank-micro
+ * SPDX-License-Identifier: GPL-3.0-or-later
  */
 #include "os_window.h"
 #include <stdlib.h>

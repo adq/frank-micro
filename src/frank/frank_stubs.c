@@ -3,7 +3,8 @@
  * frank_stubs.c — definitions for b-em symbols whose host implementations
  *                 (linux.c / midi-linux.c) are not built on the Pico.
  *
- * (c) 2026 Mikhail Matveev <xtreme@rh1.tech>
+ * Copyright (c) 2026 Mikhail Matveev <xtreme@rh1.tech>
+ * https://github.com/rh1tech/frank-micro
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 #include <stdint.h>

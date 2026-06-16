@@ -1,6 +1,10 @@
 /*
  * frank-micro — BBC Micro for RP2350
  * os_fault_pico.c — Fault handler stub.
+ *
+ * Copyright (c) 2026 Mikhail Matveev <xtreme@rh1.tech>
+ * https://github.com/rh1tech/frank-micro
+ * SPDX-License-Identifier: GPL-3.0-or-later
  */
 #include "os_fault.h"
 #include "pico/stdlib.h"

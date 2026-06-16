@@ -19,6 +19,10 @@
  *
  * Palette: BBC physical colours 0-7 → palette indices 0-7.
  * Flash colours add offset 8 (0-15 total).
+ *
+ * Copyright (c) 2026 Mikhail Matveev <xtreme@rh1.tech>
+ * https://github.com/rh1tech/frank-micro
+ * SPDX-License-Identifier: GPL-3.0-or-later
  */
 #include "render.h"
 #include "teletext.h"

@@ -7,6 +7,10 @@
  *
  * We compile this file and DO NOT compile the file-operations portion of
  * util.c (controlled by -DPICO_BUILD in util.c).
+ *
+ * Copyright (c) 2026 Mikhail Matveev <xtreme@rh1.tech>
+ * https://github.com/rh1tech/frank-micro
+ * SPDX-License-Identifier: GPL-3.0-or-later
  */
 #include "util.h"
 #include "ff.h"

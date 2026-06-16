@@ -4,7 +4,8 @@
  *                and mount them in b-em via the sector_read interface, with
  *                SHIFT-BREAK autoboot.
  *
- * (c) 2026 Mikhail Matveev <xtreme@rh1.tech>
+ * Copyright (c) 2026 Mikhail Matveev <xtreme@rh1.tech>
+ * https://github.com/rh1tech/frank-micro
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
  * A whole image is far too big to hold in RAM alongside the BBC's RAM/ROM, so

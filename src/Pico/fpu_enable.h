@@ -10,6 +10,10 @@
  * to a HardFault. Enabling the FPU on every core makes those instructions valid
  * everywhere. FPCCR ASPEN/LSPEN (automatic + lazy FP state preservation) are set
  * by the SDK, so FP use in interrupt handlers is also safe.
+ *
+ * Copyright (c) 2026 Mikhail Matveev <xtreme@rh1.tech>
+ * https://github.com/rh1tech/frank-micro
+ * SPDX-License-Identifier: GPL-3.0-or-later
  */
 #ifndef FRANK_FPU_ENABLE_H
 #define FRANK_FPU_ENABLE_H

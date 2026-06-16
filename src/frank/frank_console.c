@@ -3,7 +3,8 @@
  * frank_console.c — inject keystrokes into the emulator over the USB-CDC
  *                   serial console (for autonomous testing / headless control).
  *
- * (c) 2026 Mikhail Matveev <xtreme@rh1.tech>
+ * Copyright (c) 2026 Mikhail Matveev <xtreme@rh1.tech>
+ * https://github.com/rh1tech/frank-micro
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
  * Protocol (one byte per command, read from stdin / USB CDC):

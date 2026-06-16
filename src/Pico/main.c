@@ -7,6 +7,10 @@
  *
  * The BBC CPU runs on Core 1 via os_thread_create().
  * Core 0 handles vsync (micro_frame_present), keyboard, and serial console.
+ *
+ * Copyright (c) 2026 Mikhail Matveev <xtreme@rh1.tech>
+ * https://github.com/rh1tech/frank-micro
+ * SPDX-License-Identifier: GPL-3.0-or-later
  */
 #include "pico/stdlib.h"
 #include "pico/multicore.h"

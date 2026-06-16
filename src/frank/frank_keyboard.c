@@ -2,7 +2,8 @@
  * frank-micro — BBC Micro for RP2350 (b-em port)
  * frank_keyboard.c — PS/2 keyboard -> b-em key matrix.
  *
- * (c) 2026 Mikhail Matveev <xtreme@rh1.tech>
+ * Copyright (c) 2026 Mikhail Matveev <xtreme@rh1.tech>
+ * https://github.com/rh1tech/frank-micro
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
  * The frank PS/2 driver (ps2kbd_get_key) yields IBM PC XT-style scancodes.

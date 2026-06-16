@@ -5,6 +5,10 @@
  * JIT and inturbo CPU modes are not available on Cortex-M33.
  * The null ASM backends (asm/null/) handle all other JIT symbols.
  * This file only provides stubs for the two CPU driver factory functions.
+ *
+ * Copyright (c) 2026 Mikhail Matveev <xtreme@rh1.tech>
+ * https://github.com/rh1tech/frank-micro
+ * SPDX-License-Identifier: GPL-3.0-or-later
  */
 #include "inturbo.h"
 #include "jit.h"

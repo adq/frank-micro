@@ -9,6 +9,10 @@
  * micro_key_tick() (called once per 50 Hz frame from the keyboard poll).
  * Each key is held for a few frames so the BBC OS keyboard scan registers
  * it reliably, then released before the next key.
+ *
+ * Copyright (c) 2026 Mikhail Matveev <xtreme@rh1.tech>
+ * https://github.com/rh1tech/frank-micro
+ * SPDX-License-Identifier: GPL-3.0-or-later
  */
 #ifndef MICRO_KEYS_H
 #define MICRO_KEYS_H

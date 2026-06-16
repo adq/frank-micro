@@ -5,6 +5,10 @@
  * beebjit's sound.c generates SN76489 audio at ~44100 Hz and calls
  * os_sound_write() with a buffer of int16_t samples.  We push those
  * into the shared I2S ring buffer that Core 1 drains to the DAC.
+ *
+ * Copyright (c) 2026 Mikhail Matveev <xtreme@rh1.tech>
+ * https://github.com/rh1tech/frank-micro
+ * SPDX-License-Identifier: GPL-3.0-or-later
  */
 #include "os_sound.h"
 #include <stdlib.h>

@@ -3,7 +3,8 @@
  * frank_audio.c — bridges b-em's audio buffer pool (sn76489 output) to the
  *                 frank HDMI audio ring.
  *
- * (c) 2026 Mikhail Matveev <xtreme@rh1.tech>
+ * Copyright (c) 2026 Mikhail Matveev <xtreme@rh1.tech>
+ * https://github.com/rh1tech/frank-micro
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
  * b-em fills a mono int16 buffer (sound_poll_n) and hands it back via

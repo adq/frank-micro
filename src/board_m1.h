@@ -1,13 +1,13 @@
 /*
- * frank-cpc — Amstrad CPC for RP2350
+ * frank-micro — BBC Micro for RP2350
  *
  * Copyright (c) 2026 Mikhail Matveev <xtreme@rh1.tech>
- * https://github.com/rh1tech/frank-cpc
+ * https://github.com/rh1tech/frank-micro
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 
 /*
- * board_m1.h — Murmulator 1.x GPIO layout for frank-cpc.
+ * board_m1.h — Murmulator 1.x GPIO layout for frank-micro.
  *
  * Different pinout from M2. PIO-HDMI/VGA at GPIO 6-13.
  * No HSTX (HDMI_BASE_PIN != 12). No PS/2 mouse. No HDMI audio.

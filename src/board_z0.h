@@ -1,13 +1,13 @@
 /*
- * frank-cpc — Amstrad CPC for RP2350
+ * frank-micro — BBC Micro for RP2350
  *
  * Copyright (c) 2026 Mikhail Matveev <xtreme@rh1.tech>
- * https://github.com/rh1tech/frank-cpc
+ * https://github.com/rh1tech/frank-micro
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 
 /*
- * board_z0.h — Waveshare RP2350-PiZero GPIO layout for frank-cpc.
+ * board_z0.h — Waveshare RP2350-PiZero GPIO layout for frank-micro.
  *
  * PIO-HDMI only (HDMI_BASE_PIN=32, GPIO 32-39). No TV/VGA.
  * SD Card on SPI1 (pins above GPIO 28 require SPI1).

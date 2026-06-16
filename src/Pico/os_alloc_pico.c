@@ -11,6 +11,10 @@
  * (map_size = 64KB, map_offset = 0), so we only need a single 64KB chunk.
  * ROM data is copied from PSRAM into the 6502 address space at bank-switch
  * time — PSRAM access is only needed during bank-switches, not at run time.
+ *
+ * Copyright (c) 2026 Mikhail Matveev <xtreme@rh1.tech>
+ * https://github.com/rh1tech/frank-micro
+ * SPDX-License-Identifier: GPL-3.0-or-later
  */
 #include "os_alloc.h"
 #include "psram_init.h"

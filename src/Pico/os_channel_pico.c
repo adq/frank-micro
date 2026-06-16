@@ -6,6 +6,10 @@
  * runs on Core 0.  Messages are passed through a simple spinlock-protected
  * shared buffer.  The RP2350 hardware FIFO is used to signal readiness so
  * each core can block efficiently without spinning the bus.
+ *
+ * Copyright (c) 2026 Mikhail Matveev <xtreme@rh1.tech>
+ * https://github.com/rh1tech/frank-micro
+ * SPDX-License-Identifier: GPL-3.0-or-later
  */
 #include "os_channel.h"
 #include "pico/stdlib.h"

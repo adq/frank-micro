@@ -5,6 +5,10 @@
  * The full beebjit debugger is desktop-only (uses a terminal REPL).
  * On RP2350 we provide empty stubs so the rest of the emulator compiles
  * and links, but the debugger is never activated.
+ *
+ * Copyright (c) 2026 Mikhail Matveev <xtreme@rh1.tech>
+ * https://github.com/rh1tech/frank-micro
+ * SPDX-License-Identifier: GPL-3.0-or-later
  */
 #include "debug.h"
 #include "cpu_driver.h"
