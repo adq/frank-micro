@@ -301,6 +301,46 @@ void pwm_audio_set_frame_rate(int frame_rate) {
     dma_xfer_count = n;
 }
 
+void pwm_audio_set_chunk_frames(uint32_t frames) {
+    if (frames < 1) frames = 1;
+    if (frames > DMA_BUFFER_SAMPLES) frames = DMA_BUFFER_SAMPLES;
+    dma_xfer_count = frames;
+}
+
+void pwm_audio_push_samples_blocking(const int16_t *buf, int count) {
+    const int32_t center = (int32_t)pwm_center;
+    const int32_t max_lvl = (int32_t)pwm_wrap;
+    const int32_t swing = (int32_t)(pwm_wrap >> 1);
+
+    int pos = 0;
+
+    while (pos < count) {
+        int chunk = count - pos;
+        if (chunk > (int)dma_xfer_count) chunk = (int)dma_xfer_count;
+
+        /* Wait for a free DMA buffer instead of dropping. The PWM-paced DMA
+         * ring always keeps chaining (padding silence on underrun), so a
+         * buffer is guaranteed to free up — no deadlock. */
+        uint8_t idx;
+        while ((idx = claim_buf()) == 0xFF)
+            tight_loop_contents();
+
+        uint32_t *dst = dma_bufs[idx];
+        for (int i = 0; i < chunk; i++) {
+            int32_t s = buf[pos + i];
+            int32_t scaled = (s * swing) >> 15;
+            int32_t lvl = scaled + center;
+            if (lvl < 0) lvl = 0;
+            if (lvl > max_lvl) lvl = max_lvl;
+            uint32_t u = (uint32_t)lvl;
+            dst[i] = (u << 16) | u;
+        }
+
+        commit_buf(idx, (uint32_t)chunk);
+        pos += chunk;
+    }
+}
+
 void pwm_audio_fill_silence(int count) {
     uint32_t silence = ((uint32_t)pwm_center << 16) | pwm_center;
     int remaining = count;

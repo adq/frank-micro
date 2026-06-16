@@ -22,6 +22,7 @@ typedef enum {
     FRANK_SETTING_MONITOR,     /* Color / Green / Amber     (live)         */
     FRANK_SETTING_SOUND,       /* On / Off                  (live)         */
     FRANK_SETTING_VOLUME,      /* 0..100%                   (live)         */
+    FRANK_SETTING_AUDIO,       /* HDMI / I2S / PWM output   (live)         */
     FRANK_SETTING_LIMIT_SPEED, /* On / Off                  (live)         */
     FRANK_SETTING_START_MODE,  /* Startup MODE 0..7 (links) (needs reset)  */
     FRANK_SETTING_CAPS_CTRL,   /* Normal / map CAPS+CTRL→A+S (live)        */
@@ -36,6 +37,18 @@ typedef enum {
     FRANK_MODEL_MASTER,        /* BBC Master 128            */
     FRANK_MODEL_COUNT,
 } frank_model_t;
+
+/* Audio-output backend. All three are switchable live from F12 (no restart).
+ *   HDMI: audio embedded in the HDMI data-island stream (no extra wiring).
+ *   I2S : external DAC on GPIO 9/10/11 (best quality).
+ *   PWM : two-pin PWM into an RC low-pass filter on GPIO 10/11 (lo-fi).
+ * I2S and PWM share GPIO 10/11, so only one drives the pins at a time. */
+typedef enum {
+    FRANK_AUDIO_HDMI = 0,
+    FRANK_AUDIO_I2S,
+    FRANK_AUDIO_PWM,
+    FRANK_AUDIO_DRV_COUNT,
+} frank_audio_driver_t;
 
 /* NES/SNES + USB gamepad → BBC key mapping presets. */
 typedef enum {
@@ -63,6 +76,7 @@ typedef struct {
     uint8_t monitor;      /* 0=Color, 1=Green, 2=Amber     */
     uint8_t sound;        /* 0=Off, 1=On                   */
     uint8_t volume;       /* 0..10 (x10 = 0%..100%)        */
+    uint8_t audio_driver; /* frank_audio_driver_t: HDMI/I2S/PWM output  */
     uint8_t limit_speed;  /* 0=Off, 1=On                   */
     uint8_t start_mode;   /* 0..7 power-on screen MODE (keyboard links) */
     uint8_t caps_ctrl;    /* 0=Normal, 1=map CAPS/CTRL to A/S           */
@@ -82,6 +96,12 @@ extern bool g_frank_settings_dirty;
 extern volatile int  g_frank_volume;        /* 0..100, read by frank_audio  */
 extern volatile bool g_frank_sound_on;      /* read by frank_audio          */
 extern volatile bool g_frank_limit_speed;   /* read by frank_perf_tick      */
+extern volatile int  g_frank_audio_driver;  /* frank_audio_driver_t, read by frank_audio */
+
+/* Select the active audio backend (HDMI/I2S/PWM).  Implemented in
+ * frank_audio.c — lazily brings up the chosen driver and routes samples to
+ * it.  Safe to call live (no restart needed). */
+void frank_audio_set_driver(int drv);
 
 /* Number of choices for a setting. */
 int  frank_settings_choices(frank_setting_id_t id);

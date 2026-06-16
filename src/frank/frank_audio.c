@@ -13,8 +13,15 @@
 #include <stdint.h>
 #include <string.h>
 #include "pico.h"
+#include "pico/stdlib.h"
+#include "hardware/gpio.h"
 #include "pico/util/buffer.h"
 #include "x_gui.h"
+
+#include "board_config.h"
+#include "frank_settings.h"
+#include "audio.h"          /* I2S DAC driver (drivers/audio.c)            */
+#include "pwm_audio.h"      /* PWM audio driver (drivers/pwm_audio)        */
 
 #if defined(HDMI_PIO_AUDIO)
 #include "frank_hdmi.h"
@@ -28,8 +35,109 @@ extern volatile bool g_frank_sound_on;
 
 bool x_gui_audio_init_failed;
 
+/* Active audio backend (frank_audio_driver_t).  Read by give_audio_buffer(),
+ * written by frank_audio_set_driver().  Defaults to HDMI so a fresh board
+ * with no micro.ini behaves exactly as before. */
+volatile int g_frank_audio_driver = FRANK_AUDIO_HDMI;
+
+/* ── I2S / PWM backends ────────────────────────────────────────────────────
+ * The BBC SN76489 emits mono samples at FREQ_SO = 31250 Hz.  The HDMI path
+ * resamples to the CEA-standard 32000 Hz (see below), but I2S and PWM are
+ * free-running local DACs that lock to our own sysclk, so we drive them at
+ * the native 31250 Hz directly — no resampling, no drift.
+ *
+ * I2S lives on PIO1 + DMA ch 10/11 (DMA_IRQ_0); PWM on DMA ch 8/9
+ * (DMA_IRQ_2).  HDMI uses PIO0 + DMA ch 0-5 (DMA_IRQ_1).  No collisions.
+ * Both I2S and PWM are brought up lazily the first time they are selected. */
+#define FRANK_AUDIO_RATE 31250          /* == FREQ_SO (drivers run native)   */
+#define FRANK_I2S_CHUNK  882            /* frames per i2s_dma_write           */
+#define FRANK_AUDIO_SAMPLES 882         /* mono frames b-em delivers per give */
+
+static bool          s_i2s_inited = false;
+static i2s_config_t  s_i2s_cfg;
+static bool          s_pwm_inited = false;
+
+/* I2S and PWM share GPIO 10/11 (PWM_PIN0/1 == I2S clock pins).  Reassert the
+ * pin function whenever we switch so the chosen driver actually reaches the
+ * pads even after the other one claimed them. */
+static void i2s_claim_pins(void) {
+    gpio_set_function(I2S_DATA_PIN,           GPIO_FUNC_PIO1);
+    gpio_set_function(I2S_CLOCK_PIN_BASE,     GPIO_FUNC_PIO1);
+    gpio_set_function(I2S_CLOCK_PIN_BASE + 1, GPIO_FUNC_PIO1);
+}
+
+static void pwm_claim_pins(void) {
+    gpio_set_function(PWM_PIN0, GPIO_FUNC_PWM);
+    gpio_set_function(PWM_PIN1, GPIO_FUNC_PWM);
+}
+
+static void ensure_i2s(void) {
+    if (!s_i2s_inited) {
+        s_i2s_cfg = i2s_get_default_config();
+        s_i2s_cfg.sample_freq     = FRANK_AUDIO_RATE;
+        s_i2s_cfg.dma_trans_count = FRANK_I2S_CHUNK;
+        s_i2s_cfg.volume          = 0;   /* volume applied in software below */
+        i2s_init(&s_i2s_cfg);            /* also sets pins to PIO1 function   */
+        s_i2s_inited = true;
+    } else {
+        i2s_claim_pins();
+    }
+}
+
+static void ensure_pwm(void) {
+    if (!s_pwm_inited) {
+        pwm_audio_init(PWM_PIN0, PWM_PIN1, FRANK_AUDIO_RATE);
+        /* One full give-frame (882 samples) per DMA buffer so every buffer is
+         * filled completely — no silence padding, no partial-chunk clicks. */
+        pwm_audio_set_chunk_frames(FRANK_AUDIO_SAMPLES);
+        s_pwm_inited = true;
+    } else {
+        pwm_claim_pins();
+    }
+}
+
+/* Flush silence into the backend we are leaving so its free-running DMA does
+ * not loop the last buffer (which would otherwise drone on a switch-away). */
+static void i2s_quiet(void) {
+    if (!s_i2s_inited) return;
+    static int16_t zero[FRANK_I2S_CHUNK * 2];
+    memset(zero, 0, sizeof(zero));
+    /* Two writes guarantee both ping-pong buffers hold silence (i2s_dma_write
+     * blocks until a buffer frees, so this is deterministic). */
+    i2s_dma_write(&s_i2s_cfg, zero);
+    i2s_dma_write(&s_i2s_cfg, zero);
+}
+
+static void pwm_quiet(void) {
+    if (!s_pwm_inited) return;
+    /* pwm_audio_fill_silence() drops when no buffer is free, so retry briefly
+     * to make sure both DMA buffers end up silent. */
+    for (int i = 0; i < 8; ++i) {
+        pwm_audio_fill_silence(FRANK_I2S_CHUNK * 2);
+        sleep_us(500);
+    }
+}
+
+void frank_audio_set_driver(int drv) {
+    if (drv < 0 || drv >= FRANK_AUDIO_DRV_COUNT) drv = FRANK_AUDIO_HDMI;
+    int old = g_frank_audio_driver;
+
+    /* Silence the backend we are leaving (only matters when it keeps driving
+     * its pins after the switch). */
+    if (old == FRANK_AUDIO_I2S && drv != FRANK_AUDIO_I2S) i2s_quiet();
+    if (old == FRANK_AUDIO_PWM && drv != FRANK_AUDIO_PWM) pwm_quiet();
+
+    switch (drv) {
+        case FRANK_AUDIO_I2S: ensure_i2s(); i2s_claim_pins(); break;
+        case FRANK_AUDIO_PWM: ensure_pwm(); pwm_claim_pins(); break;
+        case FRANK_AUDIO_HDMI:
+        default:              break;   /* HDMI is always live on core1       */
+    }
+
+    g_frank_audio_driver = drv;
+}
+
 /* A small mono sample buffer reused each fill (b-em uses one in flight). */
-#define FRANK_AUDIO_SAMPLES 882   /* 1 frame @ ~44.1kHz / 50Hz */
 static int16_t s_mono[FRANK_AUDIO_SAMPLES];
 static mem_buffer_t s_mem = {
     .size = sizeof(s_mono),
@@ -59,34 +167,70 @@ struct audio_buffer *take_audio_buffer(struct audio_buffer_pool *ac, bool block)
 }
 
 /*
- * Push b-em's audio into the HDMI ring, resampled from the BBC's native
- * 31250 Hz (the sn76489 output rate, FREQ_SO) to the HDMI ring's standard
- * 32000 Hz, and up-mixed mono -> stereo.
+ * Push b-em's mono audio to the selected backend.
  *
- * The HDMI audio data-island stream advertises a STANDARD CEA-861 rate
- * (32000 Hz) so real HDMI sinks lock their audio clock to our Clock-
- * Regeneration packet.  A non-standard rate (31250 Hz) is mishandled by
- * many sinks, which then drop a sample every few seconds.
+ *   I2S / PWM: driven at the BBC's native 31250 Hz, so the samples are copied
+ *              through 1:1 (with software volume) — no resampling.
  *
- * The ratio 31250/32000 = 0.9765625 = 64000/65536 exactly, so the linear
- * resampler below is exact fixed-point: one output sample advances the input
- * phase by 64000 in 16.16, emitting 1.024 output samples per input sample.
+ *   HDMI:      resampled from 31250 Hz to the HDMI ring's standard 32000 Hz
+ *              and up-mixed mono -> stereo.  The HDMI audio data-island stream
+ *              advertises a STANDARD CEA-861 rate (32000 Hz) so real HDMI
+ *              sinks lock their audio clock to our Clock-Regeneration packet.
+ *              A non-standard rate (31250 Hz) is mishandled by many sinks,
+ *              which then drop a sample every few seconds.
+ *
+ *              The ratio 31250/32000 = 0.9765625 = 64000/65536 exactly, so the
+ *              linear resampler below is exact fixed-point: one output sample
+ *              advances the input phase by 64000 in 16.16.
  */
 #define RESAMP_STEP   64000u   /* (31250/32000) << 16, exact */
 #define RESAMP_ONE    0x10000u
 
 void give_audio_buffer(struct audio_buffer_pool *ac, struct audio_buffer *buffer) {
-#if defined(HDMI_PIO_AUDIO)
     const int16_t *src = (const int16_t *)buffer->buffer->bytes;
     uint32_t n = buffer->sample_count;
 
+    int vol = g_frank_sound_on ? g_frank_volume : 0;
+    if (vol > 100) vol = 100;
+
+    int drv = g_frank_audio_driver;
+
+    if (drv == FRANK_AUDIO_I2S) {
+        if (!s_i2s_inited) return;
+        /* Native 31250 Hz: build one fixed FRANK_I2S_CHUNK stereo block. */
+        static int16_t stereo[FRANK_I2S_CHUNK * 2];
+        uint32_t cnt = (n > FRANK_I2S_CHUNK) ? FRANK_I2S_CHUNK : n;
+        for (uint32_t i = 0; i < cnt; i++) {
+            int16_t s = (int16_t)(((int32_t)src[i] * vol) / 100);
+            stereo[i * 2]     = s;
+            stereo[i * 2 + 1] = s;
+        }
+        for (uint32_t i = cnt; i < FRANK_I2S_CHUNK; i++) {
+            stereo[i * 2] = 0;
+            stereo[i * 2 + 1] = 0;
+        }
+        i2s_dma_write(&s_i2s_cfg, stereo);
+        return;
+    }
+
+    if (drv == FRANK_AUDIO_PWM) {
+        if (!s_pwm_inited) return;
+        static int16_t mono[FRANK_AUDIO_SAMPLES];
+        uint32_t cnt = (n > FRANK_AUDIO_SAMPLES) ? FRANK_AUDIO_SAMPLES : n;
+        for (uint32_t i = 0; i < cnt; i++)
+            mono[i] = (int16_t)(((int32_t)src[i] * vol) / 100);
+        /* Blocking, exactly one full DMA buffer per call: self-paced to the
+         * PWM output clock (like I2S) with no drops and no silence padding. */
+        pwm_audio_push_samples_blocking(mono, (int)cnt);
+        return;
+    }
+
+    /* HDMI (default) ─ resample 31250 -> 32000, mono -> stereo. */
+#if defined(HDMI_PIO_AUDIO)
     static uint32_t mu   = 0;   /* 16.16 phase between prev and cur input  */
     static int16_t  prev = 0;   /* previous input sample (persists)        */
     static int16_t  stereo[256];
     uint32_t sc = 0;            /* stereo frames buffered for flush         */
-
-    int vol = g_frank_sound_on ? g_frank_volume : 0;
-    if (vol > 100) vol = 100;
 
     for (uint32_t i = 0; i < n; i++) {
         int16_t cur = (int16_t)(((int32_t)src[i] * vol) / 100);
@@ -102,7 +246,7 @@ void give_audio_buffer(struct audio_buffer_pool *ac, struct audio_buffer *buffer
     }
     if (sc) frank_hdmi_audio_write(stereo, sc);
 #else
-    (void)buffer;
+    (void)src; (void)n;
 #endif
 }
 

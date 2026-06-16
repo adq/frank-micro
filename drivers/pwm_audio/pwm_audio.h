@@ -36,6 +36,20 @@ void pwm_audio_init(uint pin_l, uint pin_r, uint32_t sample_rate);
  * free; drops samples if both buffers are still playing. */
 void pwm_audio_push_samples(const int16_t *buf, int count);
 
+/* Like pwm_audio_push_samples() but waits for a free DMA buffer instead of
+ * dropping samples. This self-paces the producer to the PWM output clock
+ * (mirroring the I2S driver), eliminating the dropouts/crackle that the
+ * non-blocking path produces under frame-timing jitter. For glitch-free
+ * output, push exactly pwm_audio chunk-size (see pwm_audio_set_chunk_frames)
+ * samples per call so each buffer is filled completely with no silence pad. */
+void pwm_audio_push_samples_blocking(const int16_t *buf, int count);
+
+/* Set the exact per-buffer DMA transfer size (in mono frames). Use this when
+ * the producer delivers a fixed block size that does not divide evenly by the
+ * frame rate, so every committed buffer is full and never silence-padded.
+ * Clamped to the internal DMA buffer capacity. */
+void pwm_audio_set_chunk_frames(uint32_t frames);
+
 /* Drop `count` samples' worth of silence at the configured sample rate. */
 void pwm_audio_fill_silence(int count);
 

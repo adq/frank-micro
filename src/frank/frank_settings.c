@@ -38,6 +38,7 @@ frank_settings_t g_frank_settings = {
     .monitor     = 0,                   /* Color */
     .sound       = 1,                   /* On    */
     .volume      = 8,                   /* 80%   */
+    .audio_driver = FRANK_AUDIO_HDMI,   /* HDMI data-island audio by default */
     .limit_speed = 1,                   /* On    */
     .start_mode  = 7,                   /* MODE 7 (standard BBC default) */
     .caps_ctrl   = 0,                   /* Normal */
@@ -57,6 +58,7 @@ static const char *MONITOR_LABELS[] = { "Color", "Green", "Amber" };
 static const char *ONOFF_LABELS[]   = { "Off", "On" };
 static const char *CAPS_LABELS[]    = { "Normal", "A/S" };
 static const char *GAMEPAD_LABELS[] = { "Off", "Arrows", "Z X : /" };
+static const char *AUDIO_LABELS[]   = { "HDMI", "I2S", "PWM" };
 static const char *MODE_LABELS[]    = {
     "MODE 0", "MODE 1", "MODE 2", "MODE 3",
     "MODE 4", "MODE 5", "MODE 6", "MODE 7"
@@ -81,6 +83,7 @@ int frank_settings_choices(frank_setting_id_t id) {
         case FRANK_SETTING_MONITOR:     return 3;
         case FRANK_SETTING_SOUND:       return 2;
         case FRANK_SETTING_VOLUME:      return VOLUME_STEPS;
+        case FRANK_SETTING_AUDIO:       return FRANK_AUDIO_DRV_COUNT;
         case FRANK_SETTING_LIMIT_SPEED: return 2;
         case FRANK_SETTING_START_MODE:  return 8;
         case FRANK_SETTING_CAPS_CTRL:   return 2;
@@ -96,6 +99,7 @@ const char *frank_settings_label(frank_setting_id_t id) {
         case FRANK_SETTING_MONITOR:     return "Monitor";
         case FRANK_SETTING_SOUND:       return "Sound";
         case FRANK_SETTING_VOLUME:      return "Volume";
+        case FRANK_SETTING_AUDIO:       return "Audio Out";
         case FRANK_SETTING_LIMIT_SPEED: return "Limit Speed";
         case FRANK_SETTING_START_MODE:  return "Startup Mode";
         case FRANK_SETTING_CAPS_CTRL:   return "CAPS/CTRL Keys";
@@ -118,6 +122,8 @@ const char *frank_settings_value_label(frank_setting_id_t id) {
             if (idx >= VOLUME_STEPS) idx = VOLUME_STEPS - 1;
             return VOLUME_LABELS[idx];
         }
+        case FRANK_SETTING_AUDIO:
+            return AUDIO_LABELS[g_frank_settings.audio_driver % FRANK_AUDIO_DRV_COUNT];
         case FRANK_SETTING_LIMIT_SPEED:
             return ONOFF_LABELS[g_frank_settings.limit_speed & 1];
         case FRANK_SETTING_START_MODE:
@@ -181,6 +187,7 @@ void frank_settings_apply_live(void) {
     g_frank_sound_on    = (g_frank_settings.sound != 0);
     sound_internal      = g_frank_sound_on;
     g_frank_volume      = (int)g_frank_settings.volume * 10;
+    frank_audio_set_driver(g_frank_settings.audio_driver);
     g_frank_limit_speed = (g_frank_settings.limit_speed != 0);
     sound_dac           = (g_frank_settings.dac != 0);
     keyas               = (g_frank_settings.caps_ctrl != 0);
@@ -212,6 +219,10 @@ void frank_settings_step(frank_setting_id_t id, int delta) {
         case FRANK_SETTING_VOLUME:
             step_u8(&g_frank_settings.volume, delta, n);
             g_frank_volume = (int)g_frank_settings.volume * 10;
+            break;
+        case FRANK_SETTING_AUDIO:
+            step_u8(&g_frank_settings.audio_driver, delta, n);
+            frank_audio_set_driver(g_frank_settings.audio_driver);
             break;
         case FRANK_SETTING_LIMIT_SPEED:
             step_u8(&g_frank_settings.limit_speed, delta, n);
@@ -330,6 +341,7 @@ static const ini_field_t INI_FIELDS[] = {
     { "monitor",     &g_frank_settings.monitor,     3 },
     { "sound",       &g_frank_settings.sound,       2 },
     { "volume",      &g_frank_settings.volume,      VOLUME_STEPS },
+    { "audio_driver", &g_frank_settings.audio_driver, FRANK_AUDIO_DRV_COUNT },
     { "limit_speed", &g_frank_settings.limit_speed, 2 },
     { "start_mode",  &g_frank_settings.start_mode,  8 },
     { "caps_ctrl",   &g_frank_settings.caps_ctrl,   2 },
