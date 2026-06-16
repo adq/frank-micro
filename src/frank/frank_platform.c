@@ -85,11 +85,9 @@ void frank_perf_tick(void) {
         frank_disk_autoload();         /* mount discs from settings / known names */
         if (frank_disc_name(0)) {
             frank_disc_request_boot();  /* SHIFT-BREAK an autoloaded disc */
-        } else {
-#ifndef FRANK_NO_AUTOBOOT
-            frank_disc_preload();       /* fall back to the bundled demo disc */
-#endif
         }
+        /* No demo-disc fallback: with no disc configured the BBC boots to
+         * its built-in BASIC prompt instead of auto-loading a bundled game. */
     }
 
     /* Release the autoboot SHIFT key once the disc has begun booting. */
