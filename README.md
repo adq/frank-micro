@@ -283,13 +283,11 @@ Third-party drivers and libraries:
 |-----------|--------|---------|-------|
 | FatFS | ChaN | BSD-style permissive | `drivers/fatfs/` |
 | pico_fatfs SD driver | elehobica | BSD-2-Clause | `drivers/sdcard/` |
-| PS/2 driver (PIO) | mrmltr | GPL-2.0 | `drivers/ps2/` |
 | NES/SNES pad PIO | shuichitakano / fhoedemakers | MIT | `drivers/nespad/` |
 | I2S PIO program | Raspberry Pi (Trading) Ltd. | BSD-3-Clause | `drivers/audio_i2s.pio` |
 | TinyUSB + HID host | Ha Thach | MIT | `drivers/usbhid/` |
 | XInput host | Ryan Wendland | MIT | `drivers/usbhid/xinput_host.*` |
 | dlmalloc | Doug Lea | CC0 / public domain | `drivers/dlmalloc.c` |
-| frank-hdmi-sound (HDMI video + data-island audio) | Mikhail Matveev | GPL-3.0 | `frank-hdmi-sound/` |
 
 > **ROMs:** the embedded BBC OS, BASIC, and DFS/MOS ROM images are the copyright of their respective owners (Acorn Computers and successors). They are included for emulation/preservation use only.
 
