@@ -6,6 +6,13 @@ Based on [B-em](https://b-em.bbcmicro.com/) by Tom Walker, with the Raspberry Pi
 
 > **Code heritage:** this project reuses code from the B-em BBC Micro emulator and its Pico fork. B-em provides the full emulation core (6502, 6845 CRTC, Video ULA, System/User VIA, 8271/1770 FDC, SN76489 sound). Graham Sanderson's Pico fork contributes the Thumb-assembly 6502 core, the raw-row rasteriser, the `x_gui` display abstraction, and the sector-streaming disc loader. Platform drivers (HDMI, PS/2, NES pad, I2S/PWM audio, USB HID) are adapted from open-source Pico projects — see the [License](#license) section for full attribution.
 
+## Screenshots
+
+| | |
+|---|---|
+| ![Acorn MOS boot screen](screenshots/screen_1.jpg) | ![Prince of Persia](screenshots/screen_2.jpg) |
+| ![Chuckie Egg high scores](screenshots/screen_3.jpg) | ![Chuckie Egg gameplay](screenshots/screen_4.jpg) |
+
 ## Supported platforms
 
 Three RP2350 boards. Each has its own pin layout. All output HDMI video; HDMI-embedded audio is available on the default build.
@@ -110,11 +117,16 @@ HDMI pins connect through 270 Ω resistors. PWM and I2S share GPIO 10/11 (M2); t
 ### SD card setup
 
 1. Format an SD card as FAT32.
-2. Create a `micro/disk/` directory at the root of the card.
+2. Download [`sdcard/micro.zip`](sdcard/micro.zip) and extract it to the root of
+   the card. This creates the `micro/` folder with the expected layout:
+   `micro/disk/` (disc images), `micro/tape/`, `micro/screenshot/`, and
+   `micro/roms/` (optional sideways ROMs).
 3. Copy your disc images into `micro/disk/`: `.ssd`, `.dsd`, `.adf`, `.adl`, `.img`. Subdirectories are fine.
 4. Insert the card. Power on.
 
-No ROM files are needed — the BBC OS, BASIC, and DFS ROMs are built into the firmware.
+No ROM files are needed to boot — the BBC OS, BASIC, and DFS ROMs are built into
+the firmware. The ROMs bundled in `micro.zip` are optional sideways ROMs (ADFS,
+View, etc.).
 
 ### During use
 
@@ -142,14 +154,10 @@ No ROM files are needed — the BBC OS, BASIC, and DFS ROMs are built into the f
 Model changes reboot the board; the other settings apply live.
 
 The settings menu also has a **Take a Screenshot** action that saves the
-current frame to the SD card.
-
-## Screenshots
-
-Press **Print Screen** (or choose **Take a Screenshot** in the F12 settings
-menu) to capture the live BBC frame. Images are written to
-`/micro/screenshot/` on the SD card as 8-bit BMP files named `BBC_0001.BMP`,
-`BBC_0002.BMP`, and so on. The directory is created automatically on first use.
+current frame to the SD card. Screenshots (from **Print Screen** or this menu
+action) are written to `/micro/screenshot/` as 8-bit BMP files named
+`BBC_0001.BMP`, `BBC_0002.BMP`, and so on. The directory is created
+automatically on first use.
 
 ## Controller support
 
@@ -199,9 +207,16 @@ Standard USB HID gamepads and XInput controllers (Xbox 360, Xbox One, compatible
    ```
    If you already cloned without `--recurse-submodules`:
    ```bash
-   git submodule update --init
+   git submodule update --init --recursive
    ```
-   This fetches [frank-hdmi-sound](https://github.com/rh1tech/frank-hdmi-sound), required for the `HDMI_PIO_AUDIO` video driver.
+   This fetches [frank-hdmi-sound](https://github.com/rh1tech/frank-hdmi-audio)
+   (repo `rh1tech/frank-hdmi-audio`), required for the `HDMI_PIO_AUDIO` video
+   driver. The submodule tracks its `frank-micro` branch, pinned to the commit
+   recorded in this repo. To pull the latest commit of that branch into the
+   submodule:
+   ```bash
+   git submodule update --remote frank-hdmi-sound
+   ```
 
 ### Build
 

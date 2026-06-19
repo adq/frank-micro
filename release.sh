@@ -10,11 +10,14 @@
 # Release builds are produced with USB HID enabled (USB keyboard/gamepad,
 # no USB serial console).  Build matrix:
 #   m2p2_frank-micro_*_hdmi-pio-audio.uf2   (M2, HDMI audio + PIO HDMI)
-#   m2p2_frank-micro_*_hdmi-pio.uf2         (M2, PIO HDMI + I2S audio)
+#   m2p2_frank-micro_*_hdmi-pio.uf2         (M2, PIO HDMI/VGA + I2S audio)
+#   m2p2_frank-micro_*_composite.uf2        (M2, composite PAL/NTSC TV + I2S audio)
 #   m1p2_frank-micro_*_hdmi-pio-audio.uf2   (M1, HDMI audio + PIO HDMI)
-#   m1p2_frank-micro_*_hdmi-pio.uf2         (M1, PIO HDMI + I2S audio)
+#   m1p2_frank-micro_*_hdmi-pio.uf2         (M1, PIO HDMI/VGA + I2S audio)
+#   m1p2_frank-micro_*_composite.uf2        (M1, composite PAL/NTSC TV + I2S audio)
 #   z0p2_frank-micro_*_hdmi-pio-audio.uf2   (Z0, HDMI audio + PIO HDMI)
-#   z0p2_frank-micro_*_hdmi-pio.uf2         (Z0, PIO HDMI + I2S audio)
+#   z0p2_frank-micro_*_hdmi-pio.uf2         (Z0, PIO HDMI/VGA + I2S audio)
+# (Composite TV is software-timed and not wired on Z0, so it is omitted there.)
 #
 set -e
 
@@ -31,8 +34,10 @@ NC='\033[0m'
 BUILD_MATRIX=(
     "m2:m2p2_:hdmi-pio-audio:HDMI_PIO_AUDIO"
     "m2:m2p2_:hdmi-pio:HDMI_PIO"
+    "m2:m2p2_:composite:COMPOSITE"
     "m1:m1p2_:hdmi-pio-audio:HDMI_PIO_AUDIO"
     "m1:m1p2_:hdmi-pio:HDMI_PIO"
+    "m1:m1p2_:composite:COMPOSITE"
     "z0:z0p2_:hdmi-pio-audio:HDMI_PIO_AUDIO"
     "z0:z0p2_:hdmi-pio:HDMI_PIO"
 )
@@ -59,7 +64,7 @@ echo -e "${CYAN}│                   FRANK MICRO Release Builder               
 echo -e "${CYAN}└─────────────────────────────────────────────────────────────────┘${NC}"
 echo ""
 echo -e "Last version: ${YELLOW}${LAST_MAJOR}.$(printf '%02d' $LAST_MINOR)${NC}"
-echo -e "Variants: ${CYAN}${#BUILD_MATRIX[@]}${NC} (m2x2, m1x2, z0x2)"
+echo -e "Variants: ${CYAN}${#BUILD_MATRIX[@]}${NC} (m2x3, m1x3, z0x2)"
 echo ""
 
 DEFAULT_VERSION="${NEXT_MAJOR}.$(printf '%02d' $NEXT_MINOR)"

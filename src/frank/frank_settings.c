@@ -60,6 +60,18 @@ static const char *ONOFF_LABELS[]   = { "Off", "On" };
 static const char *CAPS_LABELS[]    = { "Normal", "A/S" };
 static const char *GAMEPAD_LABELS[] = { "Off", "Arrows", "Z X : /" };
 static const char *AUDIO_LABELS[]   = { "HDMI", "I2S", "PWM" };
+
+/* Audio-driver choices exposed in the F12 menu depend on the build:
+ *   HDMI_PIO_AUDIO — HDMI / I2S / PWM (HDMI data-island audio is available).
+ *   HDMI_PIO, COMPOSITE — I2S / PWM only (no HDMI-embedded audio path), so
+ *   the menu starts at FRANK_AUDIO_I2S and never offers "HDMI". */
+#if defined(HDMI_PIO_AUDIO)
+#  define AUDIO_FIRST_CHOICE  FRANK_AUDIO_HDMI
+#  define AUDIO_NUM_CHOICES   3
+#else
+#  define AUDIO_FIRST_CHOICE  FRANK_AUDIO_I2S
+#  define AUDIO_NUM_CHOICES   2
+#endif
 static const char *MODE_LABELS[]    = {
     "MODE 0", "MODE 1", "MODE 2", "MODE 3",
     "MODE 4", "MODE 5", "MODE 6", "MODE 7"
@@ -84,7 +96,7 @@ int frank_settings_choices(frank_setting_id_t id) {
         case FRANK_SETTING_MONITOR:     return 3;
         case FRANK_SETTING_SOUND:       return 2;
         case FRANK_SETTING_VOLUME:      return VOLUME_STEPS;
-        case FRANK_SETTING_AUDIO:       return FRANK_AUDIO_DRV_COUNT;
+        case FRANK_SETTING_AUDIO:       return AUDIO_NUM_CHOICES;
         case FRANK_SETTING_LIMIT_SPEED: return 2;
         case FRANK_SETTING_START_MODE:  return 8;
         case FRANK_SETTING_CAPS_CTRL:   return 2;
@@ -123,8 +135,13 @@ const char *frank_settings_value_label(frank_setting_id_t id) {
             if (idx >= VOLUME_STEPS) idx = VOLUME_STEPS - 1;
             return VOLUME_LABELS[idx];
         }
-        case FRANK_SETTING_AUDIO:
-            return AUDIO_LABELS[g_frank_settings.audio_driver % FRANK_AUDIO_DRV_COUNT];
+        case FRANK_SETTING_AUDIO: {
+            int idx = (int)g_frank_settings.audio_driver;
+            if (idx < AUDIO_FIRST_CHOICE ||
+                idx >= AUDIO_FIRST_CHOICE + AUDIO_NUM_CHOICES)
+                idx = AUDIO_FIRST_CHOICE;
+            return AUDIO_LABELS[idx];
+        }
         case FRANK_SETTING_LIMIT_SPEED:
             return ONOFF_LABELS[g_frank_settings.limit_speed & 1];
         case FRANK_SETTING_START_MODE:
@@ -228,18 +245,18 @@ void frank_settings_step(frank_setting_id_t id, int delta) {
             step_u8(&g_frank_settings.volume, delta, n);
             g_frank_volume = (int)g_frank_settings.volume * 10;
             break;
-        case FRANK_SETTING_AUDIO:
-#if defined(HDMI_PIO_AUDIO)
-            step_u8(&g_frank_settings.audio_driver, delta, n);
-#else
-            /* HDMI_PIO build: cycle only the local DACs (I2S <-> PWM); the
-             * HDMI data-island audio backend does not exist in this build. */
-            g_frank_settings.audio_driver =
-                (g_frank_settings.audio_driver == FRANK_AUDIO_PWM)
-                    ? FRANK_AUDIO_I2S : FRANK_AUDIO_PWM;
-#endif
+        case FRANK_SETTING_AUDIO: {
+            /* Cycle within the build's allowed audio backends only — the
+             * "HDMI" option is excluded entirely in non-HDMI-audio builds. */
+            int cur = (int)g_frank_settings.audio_driver - AUDIO_FIRST_CHOICE;
+            if (cur < 0 || cur >= AUDIO_NUM_CHOICES) cur = 0;
+            cur += delta;
+            while (cur < 0)                 cur += AUDIO_NUM_CHOICES;
+            while (cur >= AUDIO_NUM_CHOICES) cur -= AUDIO_NUM_CHOICES;
+            g_frank_settings.audio_driver = (uint8_t)(AUDIO_FIRST_CHOICE + cur);
             frank_audio_set_driver(g_frank_settings.audio_driver);
             break;
+        }
         case FRANK_SETTING_LIMIT_SPEED:
             step_u8(&g_frank_settings.limit_speed, delta, n);
             g_frank_limit_speed = (g_frank_settings.limit_speed != 0);
