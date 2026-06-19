@@ -314,6 +314,7 @@ set(PICO_PORT
     src/frank/frank_settings.c   # runtime settings store + INI persistence
     src/frank/frank_loader.c     # SD disc image browser
     src/frank/frank_ui.c         # F11 media browser + F12 settings overlay
+    src/frank/frank_screenshot.c # PrintScreen / F12 → BMP screenshot to SD
     src/Pico/ui_draw.c           # 8bpp framebuffer drawing primitives
     src/Pico/ui_font.c           # 6x8 bitmap font for the overlay
 )

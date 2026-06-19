@@ -117,6 +117,9 @@
 #define sc_DownArrow    0x6a
 #define sc_LeftArrow    0x6b
 #define sc_RightArrow   0x6c
+/* PrintScreen → screenshot sentinel.  0x54 is unused by the BBC key matrix
+ * (see XT_PRTSC in src/frank/frank_keyboard.c). */
+#define sc_PrtSc        0x54
 
 // Event queue
 #define MAX_KEY_EVENTS 32
@@ -242,6 +245,7 @@ static unsigned char set2_extended_to_duke3d(uint8_t code) {
         case 0x74: return sc_RightArrow;
         case 0x75: return sc_UpArrow;
         case 0x7A: return sc_PgDn;
+        case 0x7C: return sc_PrtSc;   /* PrintScreen (E0 12 E0 7C) → screenshot */
         case 0x7D: return sc_PgUp;
         default: return sc_None;
     }

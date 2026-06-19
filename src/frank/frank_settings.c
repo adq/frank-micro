@@ -39,7 +39,7 @@ frank_settings_t g_frank_settings = {
     .monitor     = 0,                   /* Color */
     .sound       = 1,                   /* On    */
     .volume      = 8,                   /* 80%   */
-    .audio_driver = FRANK_AUDIO_HDMI,   /* HDMI data-island audio by default */
+    .audio_driver = FRANK_AUDIO_DEFAULT, /* HDMI data-island, or I2S in HDMI_PIO */
     .limit_speed = 1,                   /* On    */
     .start_mode  = 7,                   /* MODE 7 (standard BBC default) */
     .caps_ctrl   = 0,                   /* Normal */
@@ -184,6 +184,13 @@ static void apply_monitor(void) {
 }
 
 void frank_settings_apply_live(void) {
+#if !defined(HDMI_PIO_AUDIO)
+    /* HDMI audio is unavailable in the HDMI_PIO build; fold any persisted
+     * "HDMI" selection (e.g. from a micro.ini written by an HDMI_PIO_AUDIO
+     * build) onto the I2S DAC so the option is never silently dead. */
+    if (g_frank_settings.audio_driver == FRANK_AUDIO_HDMI)
+        g_frank_settings.audio_driver = FRANK_AUDIO_I2S;
+#endif
     apply_monitor();
     g_frank_sound_on    = (g_frank_settings.sound != 0);
     sound_internal      = g_frank_sound_on;
@@ -222,7 +229,15 @@ void frank_settings_step(frank_setting_id_t id, int delta) {
             g_frank_volume = (int)g_frank_settings.volume * 10;
             break;
         case FRANK_SETTING_AUDIO:
+#if defined(HDMI_PIO_AUDIO)
             step_u8(&g_frank_settings.audio_driver, delta, n);
+#else
+            /* HDMI_PIO build: cycle only the local DACs (I2S <-> PWM); the
+             * HDMI data-island audio backend does not exist in this build. */
+            g_frank_settings.audio_driver =
+                (g_frank_settings.audio_driver == FRANK_AUDIO_PWM)
+                    ? FRANK_AUDIO_I2S : FRANK_AUDIO_PWM;
+#endif
             frank_audio_set_driver(g_frank_settings.audio_driver);
             break;
         case FRANK_SETTING_LIMIT_SPEED:

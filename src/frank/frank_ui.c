@@ -14,6 +14,7 @@
 #include "frank_settings.h"
 #include "frank_loader.h"
 #include "frank_disc.h"
+#include "frank_screenshot.h"
 #include "ui_draw.h"
 #include "crash_handler.h"
 
@@ -39,9 +40,10 @@ static void layout_window(int content_h) {
 }
 
 /* Settings rows */
-#define SETTINGS_APPLY_ROW  FRANK_SETTING_COUNT
-#define SETTINGS_BACK_ROW   (FRANK_SETTING_COUNT + 1)
-#define SETTINGS_TOTAL_ROWS (FRANK_SETTING_COUNT + 2)
+#define SETTINGS_SCREENSHOT_ROW FRANK_SETTING_COUNT
+#define SETTINGS_APPLY_ROW      (FRANK_SETTING_COUNT + 1)
+#define SETTINGS_BACK_ROW       (FRANK_SETTING_COUNT + 2)
+#define SETTINGS_TOTAL_ROWS     (FRANK_SETTING_COUNT + 3)
 #define SETTINGS_VISIBLE_ROWS 14
 
 #define DISK_VISIBLE_ROWS 13
@@ -88,6 +90,12 @@ bool frank_ui_is_visible(void) {
 
 bool frank_ui_wants_keys(void) {
     return s_state != UI_HIDDEN;
+}
+
+void frank_ui_toast(const char *msg) {
+    if (!msg) return;
+    snprintf(s_toast, sizeof(s_toast), "%s", msg);
+    s_toast_frames = 100;   /* ~2 s at 50 Hz */
 }
 
 void frank_ui_toggle(void) {
@@ -144,7 +152,10 @@ static bool handle_settings_page(unsigned int ks) {
             return true;
 
         case FRANK_KS_Return:
-            if (s_setting_row == SETTINGS_APPLY_ROW) {
+            if (s_setting_row == SETTINGS_SCREENSHOT_ROW) {
+                g_frank_screenshot_pending = true;
+                s_state = UI_HIDDEN;
+            } else if (s_setting_row == SETTINGS_APPLY_ROW) {
                 if (g_frank_settings_dirty)
                     s_state = UI_SETTINGS_CONFIRM;
                 else {
@@ -356,6 +367,10 @@ static void render_settings_page(uint8_t *fb, int stride) {
             ui_draw_string        (fb, stride, vx,                        y + 1, val, fg);
             if (sel) ui_draw_string(fb, stride, vx + vlen * UI_CHAR_W + 2, y + 1, ">", fg);
 
+        } else if (i == SETTINGS_SCREENSHOT_ROW) {
+            ui_draw_menu_item(fb, stride, x, y, cw,
+                              "Take a Screenshot",
+                              (cw - 4) / UI_CHAR_W, sel);
         } else if (i == SETTINGS_APPLY_ROW) {
             ui_draw_menu_item(fb, stride, x, y, cw,
                               g_frank_settings_dirty

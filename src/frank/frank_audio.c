@@ -37,9 +37,10 @@ extern volatile bool g_frank_sound_on;
 bool x_gui_audio_init_failed;
 
 /* Active audio backend (frank_audio_driver_t).  Read by give_audio_buffer(),
- * written by frank_audio_set_driver().  Defaults to HDMI so a fresh board
- * with no micro.ini behaves exactly as before. */
-volatile int g_frank_audio_driver = FRANK_AUDIO_HDMI;
+ * written by frank_audio_set_driver().  Defaults to FRANK_AUDIO_DEFAULT: HDMI
+ * data-island audio in the HDMI_PIO_AUDIO build, or the I2S DAC in the
+ * HDMI_PIO build (which has no HDMI-audio path). */
+volatile int g_frank_audio_driver = FRANK_AUDIO_DEFAULT;
 
 /* ── I2S / PWM backends ────────────────────────────────────────────────────
  * The BBC SN76489 emits mono samples at FREQ_SO = 31250 Hz.  The HDMI path
@@ -120,7 +121,11 @@ static void pwm_quiet(void) {
 }
 
 void frank_audio_set_driver(int drv) {
-    if (drv < 0 || drv >= FRANK_AUDIO_DRV_COUNT) drv = FRANK_AUDIO_HDMI;
+    if (drv < 0 || drv >= FRANK_AUDIO_DRV_COUNT) drv = FRANK_AUDIO_DEFAULT;
+#if !defined(HDMI_PIO_AUDIO)
+    /* No HDMI-audio backend in the HDMI_PIO build — route it to the I2S DAC. */
+    if (drv == FRANK_AUDIO_HDMI) drv = FRANK_AUDIO_I2S;
+#endif
     int old = g_frank_audio_driver;
 
     /* Silence the backend we are leaving (only matters when it keeps driving

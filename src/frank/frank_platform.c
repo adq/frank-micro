@@ -355,9 +355,26 @@ int main(void) {
     frank_gamepad_init();
     printf("NES gamepad ready\n");
 
-    /* Video: force HDMI output (frank capture-card pipeline). */
+    /* Video output selection.
+     *  HDMI_PIO_AUDIO: force HDMI — the audio rides in the HDMI data-island
+     *                  stream, so VGA (which has no audio path here) is never
+     *                  selected (matches the frank capture-card pipeline).
+     *  HDMI_PIO:       auto-detect HDMI vs VGA from the ribbon via testPins(),
+     *                  exactly like frank-cpc; audio is on the local I2S/PWM DAC.
+     */
 #if defined(HDMI_PIO_AUDIO)
     SELECT_VGA = false;
+#else
+    {
+        int link = testPins(HDMI_BASE_PIN, HDMI_BASE_PIN + 1);
+#if defined(PLATFORM_Z0)
+        SELECT_VGA = false;            /* Z0 has no VGA ribbon */
+#else
+        SELECT_VGA = (link == 0) || (link == 0x1F);
+#endif
+        printf("Video: link=0x%02X -> %s\n", (unsigned)link,
+               SELECT_VGA ? "VGA" : "HDMI");
+    }
 #endif
     graphics_init(g_out_HDMI);
     graphics_set_buffer(SCREEN[0]);

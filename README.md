@@ -120,6 +120,7 @@ No ROM files are needed — the BBC OS, BASIC, and DFS ROMs are built into the f
 
 - **F11**: disc loader overlay.
 - **F12**: settings menu.
+- **Print Screen**: save a screenshot of the current frame to the SD card.
 - **Ctrl+Alt+Del**: reset the BBC.
 - **Select + Start** on a gamepad: open the settings menu.
 
@@ -140,6 +141,16 @@ No ROM files are needed — the BBC OS, BASIC, and DFS ROMs are built into the f
 
 Model changes reboot the board; the other settings apply live.
 
+The settings menu also has a **Take a Screenshot** action that saves the
+current frame to the SD card.
+
+## Screenshots
+
+Press **Print Screen** (or choose **Take a Screenshot** in the F12 settings
+menu) to capture the live BBC frame. Images are written to
+`/micro/screenshot/` on the SD card as 8-bit BMP files named `BBC_0001.BMP`,
+`BBC_0002.BMP`, and so on. The directory is created automatically on first use.
+
 ## Controller support
 
 ### PS/2 keyboard
@@ -154,6 +165,7 @@ Full BBC keyboard mapping. Special keys:
 | Caps Lock     | CAPS LOCK        |
 | F11           | Disc loader      |
 | F12           | Settings menu    |
+| Print Screen  | Save screenshot  |
 | Ctrl+Alt+Del  | Reset            |
 
 ### NES / SNES gamepad
@@ -195,7 +207,7 @@ Standard USB HID gamepads and XInput controllers (Xbox 360, Xbox One, compatible
 
 ```bash
 ./build.sh                                        # Default: M2, PIO HDMI with embedded audio
-PLATFORM=m2 HDMI_DRIVER=HDMI_PIO ./build.sh       # M2, PIO HDMI (I2S/PWM audio only)
+PLATFORM=m2 HDMI_DRIVER=HDMI_PIO ./build.sh       # M2, PIO HDMI/VGA (I2S/PWM audio only)
 PLATFORM=m1 ./build.sh                            # Murmulator 1.x
 PLATFORM=z0 ./build.sh                            # Waveshare RP2350-PiZero
 USB_HID=1 ./build.sh                              # Enable USB HID input
@@ -210,7 +222,7 @@ All options are environment variables (or CMake cache entries).
 | Variable      | Default          | Effect |
 |---------------|------------------|--------|
 | `PLATFORM`    | `m2`             | `m1` / `m2` / `z0` |
-| `HDMI_DRIVER` | `HDMI_PIO_AUDIO` | `HDMI_PIO_AUDIO` (HDMI-embedded audio) / `HDMI_PIO` (PIO HDMI, I2S/PWM audio) |
+| `HDMI_DRIVER` | `HDMI_PIO_AUDIO` | `HDMI_PIO_AUDIO` (HDMI-embedded audio) / `HDMI_PIO` (PIO HDMI **or** VGA, auto-detected from the ribbon; I2S/PWM audio) |
 | `CPU_SPEED`   | `252`            | Core clock in MHz |
 | `USB_HID`     | `0`              | `1` enables USB HID host (keyboard, gamepad, XInput). Disables USB CDC stdio. |
 

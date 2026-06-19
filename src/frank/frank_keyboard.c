@@ -23,6 +23,7 @@
 
 #include "frank_gui.h"
 #include "frank_ui.h"
+#include "frank_screenshot.h"   /* g_frank_screenshot_pending */
 #include "frank_settings.h"     /* frank_gamepad_key_for() — gamepad → BBC key */
 
 #ifdef USB_HID_ENABLED
@@ -92,6 +93,10 @@ static const uint8_t xt_to_allegro[128] = {
 #define XT_LALT      0x38
 #define XT_F11       0x57
 #define XT_F12       0x58
+/* PrintScreen → screenshot.  Internal sentinel scancode (xt_to_allegro has no
+ * entry for 0x54, so it never reaches the BBC matrix).  Must match sc_PrtSc in
+ * drivers/ps2/ps2kbd_wrapper.c. */
+#define XT_PRTSC     0x54
 #define XT_UP        0x5a
 #define XT_DELETE    0x5f
 #define XT_PGUP      0x63
@@ -141,6 +146,8 @@ static void process_xt_event(int pressed, unsigned char sc,
         /* F11 → media browser, F12 → settings overlay. */
         if (sc == XT_F11) { frank_ui_open_disk_menu(); return; }
         if (sc == XT_F12) { frank_ui_toggle();         return; }
+        /* PrintScreen → save a screenshot of the live BBC frame. */
+        if (sc == XT_PRTSC) { g_frank_screenshot_pending = true; return; }
         /* While an overlay is open, route presses to it (consume). */
         if (frank_ui_wants_keys()) {
             unsigned int ks = xt_to_ks(sc);
@@ -198,6 +205,7 @@ static unsigned char hid_to_xt(uint8_t hid) {
     if (hid >= 0x3A && hid <= 0x43) return (unsigned char)(0x3b + (hid - 0x3A));
     if (hid == 0x44) return XT_F11;
     if (hid == 0x45) return XT_F12;
+    if (hid == 0x46) return XT_PRTSC;        /* PrintScreen → screenshot */
 
     switch (hid) {
         case 0x28: return XT_ENTER;          /* Return    */

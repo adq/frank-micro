@@ -52,6 +52,10 @@ bool frank_ui_handle_key(unsigned int ks);
  * stride = row width in bytes (320), height = number of rows (256). */
 void frank_ui_render(uint8_t *fb, int stride, int height);
 
+/* Show a transient status message at the top of the screen for ~2 seconds.
+ * Used to confirm actions such as saving a screenshot. */
+void frank_ui_toast(const char *msg);
+
 #ifdef __cplusplus
 }
 #endif

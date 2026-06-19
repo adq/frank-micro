@@ -22,6 +22,7 @@
 
 #include "frank_gui.h"
 #include "frank_ui.h"
+#include "frank_screenshot.h"
 
 /* The 320x256 8-bit framebuffers scanned out by the HDMI encoder. */
 #define FB_W 320
@@ -164,6 +165,13 @@ void x_gui_end_scanline(struct scanvideo_scanline_buffer *buffer) {
     blit_row(buffer->row0, s_scanline_number - 1, buffer->double_height);
     if (s_scanline_number >= FB_H) {
         s_scanline_number = 0;
+        /* Deferred screenshot: capture the clean BBC frame before any overlay
+         * is drawn (raised by the PrintScreen key or the F12 menu). */
+        if (g_frank_screenshot_pending) {
+            g_frank_screenshot_pending = false;
+            int rc = frank_screenshot_save(SCREEN[current_buffer]);
+            frank_ui_toast(rc == 0 ? "Screenshot saved" : "Screenshot failed");
+        }
         /* Overlay the settings/browser UI onto the freshly-rendered frame. */
         if (frank_ui_is_visible())
             frank_ui_render(SCREEN[current_buffer], FB_W, FB_H);
