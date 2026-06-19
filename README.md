@@ -208,6 +208,7 @@ Standard USB HID gamepads and XInput controllers (Xbox 360, Xbox One, compatible
 ```bash
 ./build.sh                                        # Default: M2, PIO HDMI with embedded audio
 PLATFORM=m2 HDMI_DRIVER=HDMI_PIO ./build.sh       # M2, PIO HDMI/VGA (I2S/PWM audio only)
+PLATFORM=m2 HDMI_DRIVER=COMPOSITE ./build.sh      # M2, composite PAL/NTSC TV (I2S/PWM audio)
 PLATFORM=m1 ./build.sh                            # Murmulator 1.x
 PLATFORM=z0 ./build.sh                            # Waveshare RP2350-PiZero
 USB_HID=1 ./build.sh                              # Enable USB HID input
@@ -222,7 +223,7 @@ All options are environment variables (or CMake cache entries).
 | Variable      | Default          | Effect |
 |---------------|------------------|--------|
 | `PLATFORM`    | `m2`             | `m1` / `m2` / `z0` |
-| `HDMI_DRIVER` | `HDMI_PIO_AUDIO` | `HDMI_PIO_AUDIO` (HDMI-embedded audio) / `HDMI_PIO` (PIO HDMI **or** VGA, auto-detected from the ribbon; I2S/PWM audio) |
+| `HDMI_DRIVER` | `HDMI_PIO_AUDIO` | `HDMI_PIO_AUDIO` (HDMI-embedded audio) / `HDMI_PIO` (PIO HDMI **or** VGA, auto-detected from the ribbon; I2S/PWM audio) / `COMPOSITE` (software PAL/NTSC composite TV on `TV_PIN`; I2S/PWM audio; forces 378 MHz, not on `z0`) |
 | `CPU_SPEED`   | `252`            | Core clock in MHz |
 | `USB_HID`     | `0`              | `1` enables USB HID host (keyboard, gamepad, XInput). Disables USB CDC stdio. |
 

@@ -364,6 +364,9 @@ int main(void) {
      */
 #if defined(HDMI_PIO_AUDIO)
     SELECT_VGA = false;
+#elif defined(VIDEO_COMPOSITE)
+    /* Composite TV owns the video path on Core 1 (graphics_init launches it).
+     * No HDMI/VGA ribbon autodetect — testPins() is stubbed in the TV shim. */
 #else
     {
         int link = testPins(HDMI_BASE_PIN, HDMI_BASE_PIN + 1);

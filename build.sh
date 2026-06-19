@@ -10,7 +10,8 @@
 # Usage: PLATFORM=m1 USB_HID=1 ./build.sh [CPU_MHZ] [HDMI_DRIVER]
 #   PLATFORM:    m1, m2 (default), z0
 #   HDMI_DRIVER: HDMI_PIO_AUDIO (default, HDMI-embedded audio)
-#                HDMI_PIO       (PIO HDMI + I2S audio)
+#                HDMI_PIO       (PIO HDMI/VGA + I2S/PWM audio)
+#                COMPOSITE      (software PAL/NTSC TV + I2S/PWM audio; forces 378 MHz)
 #   USB_HID:     0 (default) PS/2 only + USB serial console
 #                1 USB HID keyboard/gamepad + PS/2 (no USB serial console)
 #

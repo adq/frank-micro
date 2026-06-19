@@ -1,26 +1,27 @@
 /*
- * frank-cpc — Amstrad CPC for RP2350
+ * frank-micro — BBC Micro for RP2350
  *
  * Copyright (c) 2026 Mikhail Matveev <xtreme@rh1.tech>
- * https://github.com/rh1tech/frank-cpc
+ * https://github.com/rh1tech/frank-micro
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 
 /*
- * Composite-TV video shim for frank-cpc.
+ * Composite-TV video shim for frank-micro.
  *
  * Wraps drivers/tv/ (the software-composite PAL/NTSC driver ported from
- * murmnes) behind the same HDMI.h API the rest of frank-cpc uses, so
- * platform.c / main.c / the UI never need to know which physical
- * video path is active.
+ * murmnes) behind the same HDMI.h API the rest of frank-micro uses, so
+ * frank_platform.c / the UI never need to know which physical video path
+ * is active.
  *
  * Only compiled when VIDEO_COMPOSITE=ON.  In that build the PIO HDMI /
  * VGA / HSTX drivers are all excluded — the TV driver owns PIO0,
  * three DMA channels and a Core-1 alarm pool.
  *
  * Layout:
- *   Core 0 → CPC emulation.  graphics_set_buffer() copies the current
- *            320×240 CPC front-buffer into the TV framebuffer.
+ *   Core 0 → BBC emulation.  graphics_set_buffer() copies the current
+ *            320×256 BBC front-buffer into the TV framebuffer (centre-
+ *            cropped to the 240-line composite active area).
  *   Core 1 → tv_core1_run(): calls tv_graphics_init(), which claims
  *            PIO0 + DMA and registers a 30 kHz repeating timer on
  *            this core; the IRQ fills scanline buffers.  The core
@@ -70,7 +71,7 @@ static uint8_t __attribute__((aligned(4))) tv_frame[TV_FB_W * TV_FB_H];
 
 /* ------------------------------------------------------------------ */
 static int tv_buffer_width  = TV_FB_W;
-static int tv_buffer_height = TV_FB_H;
+static int tv_buffer_height = 256;   /* BBC source frame height (320×256) */
 static int tv_shift_x = 0;
 static int tv_shift_y = 0;
 static volatile bool tv_core1_ready = false;
@@ -86,7 +87,7 @@ static void tv_core1_run(void) {
     tv_graphics_init();
     tv_graphics_set_buffer(tv_frame, TV_FB_W, TV_FB_H);
     tv_graphics_set_mode(TV_GRAPHICSMODE_DEFAULT);
-    /* CPC framebuffer is exactly 320 px wide — the TV active area is
+    /* BBC framebuffer is exactly 320 px wide — the TV active area is
      * ~320 source pixels, so no horizontal offset needed. */
     tv_graphics_set_offset(0, 0);
     tv_graphics_set_palette(TV_PALETTE_RESERVED_LO, 0x000000);
@@ -123,9 +124,25 @@ static void __not_in_flash("tv_blit") tv_blit_frame(uint8_t *dst,
 
 void __not_in_flash_func(graphics_set_buffer)(uint8_t *buffer) {
     if (!buffer) return;
-    /* CPC framebuffer is exactly 320×240 — copy the whole thing. */
-    tv_blit_frame(tv_frame, buffer,
-                  ((size_t)TV_FB_W * TV_FB_H) >> 2);
+    const int src_h = tv_buffer_height;   /* BBC source frame height (256) */
+    if (src_h == TV_FB_H) {
+        tv_blit_frame(tv_frame, buffer, ((size_t)TV_FB_W * TV_FB_H) >> 2);
+        return;
+    }
+    /* The BBC frame is 320×256 but the composite engine displays a fixed
+     * 240-line active area.  Vertically rescale the whole frame into those
+     * 240 lines (16.16 fixed-point nearest-row) so nothing is clipped top or
+     * bottom — the slight squish is invisible on a CRT. */
+    uint32_t step = ((uint32_t)src_h << 16) / TV_FB_H;
+    uint32_t acc  = 0;
+    for (int y = 0; y < TV_FB_H; y++) {
+        int srow = (int)(acc >> 16);
+        if (srow >= src_h) srow = src_h - 1;
+        tv_blit_frame(tv_frame + (size_t)y * TV_FB_W,
+                      buffer   + (size_t)srow * TV_FB_W,
+                      TV_FB_W >> 2);
+        acc += step;
+    }
 }
 
 uint8_t *graphics_get_buffer(void) { return tv_frame; }

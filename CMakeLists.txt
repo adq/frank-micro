@@ -34,6 +34,25 @@ set(CPU_SPEED "252" CACHE STRING "CPU clock in MHz")
 set(PSRAM_SPEED "100" CACHE STRING "PSRAM max frequency in MHz (unused, no PSRAM required)")
 set(FLASH_SPEED "66"  CACHE STRING "Flash target max frequency in MHz")
 
+# Video driver: HDMI_PIO_AUDIO (HDMI-embedded audio), HDMI_PIO (PIO HDMI/VGA +
+# I2S/PWM audio) or COMPOSITE (software PAL/NTSC TV + I2S/PWM audio).  Declared
+# here — before the voltage is derived below — so COMPOSITE can raise CPU_SPEED.
+set(HDMI_DRIVER "HDMI_PIO_AUDIO" CACHE STRING "HDMI driver: HDMI_PIO_AUDIO, HDMI_PIO or COMPOSITE")
+set_property(CACHE HDMI_DRIVER PROPERTY STRINGS "HDMI_PIO_AUDIO" "HDMI_PIO" "COMPOSITE")
+
+# Composite TV is software-timed on Core 1 and not wired on the Z0 board.
+if(HDMI_DRIVER STREQUAL "COMPOSITE" AND PLATFORM STREQUAL "z0")
+    message(FATAL_ERROR "Composite TV is not supported on the Z0 platform")
+endif()
+
+# Composite-TV needs ~378 MHz: the TV scanline callback fires via a HW-alarm
+# dispatcher at 30 kHz, and at 252 MHz the dispatch overhead alone consumes
+# most of each ~32 us window (matches frank-cpc).
+if(HDMI_DRIVER STREQUAL "COMPOSITE" AND CPU_SPEED LESS 300)
+    message(STATUS "Overriding CPU_SPEED to 378 MHz for composite TV")
+    set(CPU_SPEED "378" CACHE STRING "CPU clock in MHz" FORCE)
+endif()
+
 if(PLATFORM STREQUAL "z0")
     set(PICO_BOARD_HEADER_DIRS ${CMAKE_CURRENT_LIST_DIR}/src/boards CACHE PATH "" FORCE)
     set(PICO_BOARD "waveshare_rp2350_pizero" CACHE STRING "Board type" FORCE)
@@ -62,6 +81,7 @@ if(PLATFORM STREQUAL "m1")
     set(SD_MOSI 3)
     set(SD_MISO 4)
     set(HDMI_PIN 6)
+    set(TV_PIN 6)
 elseif(PLATFORM STREQUAL "z0")
     set(PLATFORM_DEF PLATFORM_Z0)
     set(BOARD_DEF BOARD_Z0)
@@ -79,11 +99,11 @@ else()
     set(SD_MOSI 7)
     set(SD_MISO 4)
     set(HDMI_PIN 12)
+    set(TV_PIN 12)
 endif()
 
 # Video driver: HDMI_PIO_AUDIO is the target, VGA fallback via runtime detection
-set(HDMI_DRIVER "HDMI_PIO_AUDIO" CACHE STRING "HDMI driver: HDMI_PIO_AUDIO or HDMI_PIO")
-set_property(CACHE HDMI_DRIVER PROPERTY STRINGS "HDMI_PIO_AUDIO" "HDMI_PIO")
+# (HDMI_DRIVER is declared near the top so COMPOSITE can adjust CPU_SPEED).
 
 # Optional USB HID host (keyboard + gamepad).  When enabled, the native USB
 # port is owned by the TinyUSB host stack, so USB-CDC stdio (serial console)
@@ -165,6 +185,80 @@ if(HDMI_DRIVER STREQUAL "HDMI_PIO_AUDIO")
         hardware_exception
         hardware_watchdog
         frank_hdmi_sound
+    )
+elseif(HDMI_DRIVER STREQUAL "COMPOSITE")
+    # --- COMPOSITE: software composite TV (PAL/NTSC) + I2S/PWM audio ---
+    # TV engine (murmnes port).  Compiled with the symbol-rename and SRAM
+    # memset/memcpy shims so it coexists with the HDMI.h API and the 30 kHz
+    # scanline ISR never touches flash.
+    add_library(tv_driver STATIC
+        drivers/tv/tv-software.c
+        drivers/tv/graphics.c
+    )
+    target_include_directories(tv_driver PUBLIC drivers drivers/tv)
+    set(_tv_include_flags
+        "-include ${CMAKE_CURRENT_SOURCE_DIR}/drivers/tv/tv_rename.h"
+        "-include ${CMAKE_CURRENT_SOURCE_DIR}/drivers/tv/tv_mem.h"
+    )
+    string(JOIN " " _tv_include_flags_str ${_tv_include_flags})
+    set_source_files_properties(
+        drivers/tv/tv-software.c
+        drivers/tv/graphics.c
+        PROPERTIES
+        COMPILE_FLAGS "${_tv_include_flags_str}"
+    )
+    target_compile_options(tv_driver PRIVATE
+        -Wno-error
+        -Wno-incompatible-pointer-types
+        -Wno-all
+        -fno-tree-loop-distribute-patterns
+        -fno-builtin-memset
+        -fno-builtin-memcpy
+    )
+    target_compile_definitions(tv_driver PUBLIC TV_BASE_PIN=${TV_PIN} ${PLATFORM_DEF}=1)
+    target_link_libraries(tv_driver
+        pico_stdlib
+        pico_multicore
+        hardware_dma
+        hardware_pio
+        hardware_clocks
+    )
+
+    add_library(drivers
+        drivers/HDMI_tv.c
+        drivers/crash_handler.c
+        drivers/audio.c
+        drivers/audio_i2s_opt.S
+        drivers/pwm_audio/pwm_audio.c
+        drivers/psram_init.c
+        drivers/psram_allocator.c
+        drivers/dlmalloc.c
+        drivers/uart_logging.c
+    )
+    target_include_directories(drivers PUBLIC drivers drivers/pwm_audio src)
+    target_compile_definitions(drivers PUBLIC
+        ${BOARD_DEF}
+        ${PLATFORM_DEF}=1
+        VIDEO_COMPOSITE=1
+    )
+    target_compile_definitions(drivers PRIVATE
+        PSRAM_MAX_FREQ_MHZ=${PSRAM_SPEED}
+    )
+    pico_generate_pio_header(drivers ${CMAKE_CURRENT_LIST_DIR}/drivers/audio_i2s.pio)
+    target_link_libraries(drivers
+        pico_stdlib
+        pico_multicore
+        hardware_dma
+        hardware_pio
+        hardware_pwm
+        hardware_spi
+        hardware_gpio
+        hardware_clocks
+        hardware_irq
+        hardware_vreg
+        hardware_exception
+        hardware_watchdog
+        tv_driver
     )
 else()
     # HDMI_PIO: original PIO HDMI driver + I2S audio
@@ -411,6 +505,9 @@ endif()
 
 if(HDMI_DRIVER STREQUAL "HDMI_PIO_AUDIO")
     target_compile_definitions(frank-micro PRIVATE HDMI_PIO_AUDIO=1)
+elseif(HDMI_DRIVER STREQUAL "COMPOSITE")
+    target_compile_definitions(frank-micro PRIVATE VIDEO_COMPOSITE=1)
+    target_link_libraries(frank-micro tv_driver)
 endif()
 
 if(USB_HID_ENABLED)
