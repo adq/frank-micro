@@ -262,17 +262,6 @@ void give_audio_buffer(struct audio_buffer_pool *ac, struct audio_buffer *buffer
             stereo[i * 2 + 1] = 0;
         }
 
-        /* No I2C from here.  An earlier version automuted the codec's output
-         * amplifiers on a silence timer, which meant three register
-         * read-modify-writes on every transition from silence to sound. At
-         * 100 kHz that is over a millisecond of blocking I2C per note onset,
-         * inside the audio producer, which is exactly what CLAUDE.md constraint
-         * 6 says not to do: it was audibly worse than the HDMI backend.
-         *
-         * The amps are instead unmuted once when the I2S backend is selected
-         * and muted once when it is left, so the steady state does no I2C at
-         * all.  If idle hiss ever justifies an automute, drive it from a
-         * per-frame tick with a long timeout, not from here. */
         i2s_dma_write(&s_i2s_cfg, stereo);
         return;
     }

@@ -258,10 +258,6 @@ static void frank_usb_keyboard_poll(bool *ctrl_held, bool *alt_held) {
 static bool s_nespad_ok = false;
 
 void frank_gamepad_init(void) {
-    /* A board with no NES/SNES pad connector (HAS_NESPAD undefined) declares
-     * no pad pin numbers.  s_nespad_ok then stays false, which is what makes
-     * the wired-pad branch of frank_gamepad_poll() below a no-op, so nothing
-     * downstream needs its own guard. */
 #ifdef HAS_NESPAD
     uint32_t cpu_khz = clock_get_hz(clk_sys) / 1000;
     s_nespad_ok = nespad_begin(cpu_khz,

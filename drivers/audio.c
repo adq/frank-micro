@@ -104,9 +104,7 @@ void i2s_init(i2s_config_t *config) {
     audio_pio = config->pio;
     dma_transfer_count = config->dma_trans_count;
 
-    // Determine GPIO function based on which PIO we're using.  RP2350 has
-    // three PIO blocks, so a two-way test silently gives PIO2 the PIO1 pad
-    // function and the pins never see the state machine's output.
+    // Determine GPIO function based on which PIO we're using
     gpio_function_t func;
     if (config->pio == pio0) {
         func = GPIO_FUNC_PIO0;
