@@ -272,10 +272,6 @@ void ps2kbd_init(void) {
     // so it runs in the right order relative to HDMI init — porting
     // the fix from murmsnes f5113d8 where PS/2 TX perturbs live HDMI.
     //
-    // A board with no PS/2 socket (HAS_PS2 undefined, see src/board_config.h)
-    // declares no PS/2 pin numbers, so there is nothing to initialise and no
-    // PIO1 state machine to spend.  The rest of this file stays linked and
-    // inert: the queue is empty, so ps2kbd_get_key() never returns a key.
 #ifdef HAS_PS2
     ps2_init(pio1, PS2_PIN_CLK, PS2_MOUSE_CLK);
 #endif
