@@ -18,15 +18,10 @@
 #   USB_HID:     0 (default) PS/2 only + USB serial console
 #                1 USB HID keyboard/gamepad + PS/2 (no USB serial console)
 #
-# Run ./tools/setup.sh once first: it initialises the submodules and writes
-# tools/env.sh, which this script sources below to get PICO_SDK_PATH.
+# Run ./tools/setup.sh once first: it installs the host packages, initialises the
+# submodules and clones the Pico SDK.  Export PICO_SDK_PATH before building.
 #
 set -e
-
-# PICO_SDK_PATH, if tools/setup.sh has found the SDK and the shell has not.
-if [ -z "${PICO_SDK_PATH:-}" ] && [ -f "$(dirname "$0")/tools/env.sh" ]; then
-    . "$(dirname "$0")/tools/env.sh"
-fi
 
 rm -rf ./build
 mkdir build

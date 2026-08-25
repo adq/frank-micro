@@ -65,6 +65,3 @@ disc_old.c
 disc.c_edsk
 capture/
 .vscode/
-
-# Written by tools/setup.sh
-/tools/env.sh
