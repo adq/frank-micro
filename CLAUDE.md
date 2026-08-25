@@ -1,0 +1,684 @@
+# frank-micro: orientation for contributors
+
+Read this before changing anything. It exists because the repository contains a
+large amount of source that looks live and is not, and one document that
+describes a different emulator.
+
+A full audit with citations is in `docs/INVESTIGATION.md`. This file is the
+working orientation; that one is the evidence. A validated plan for porting to
+the Adafruit Fruit Jam is in `docs/FRUIT-JAM.md`. Decisions taken, dead ends
+already explored and the list of things that still need hardware are in
+`docs/HANDOFF.md`; read it before re-deriving anything about the port.
+
+---
+
+## 1. What this project is
+
+`frank-micro` is a BBC Microcomputer emulator, Model B and Master 128, running on
+the Raspberry Pi Pico 2 (RP2350). It outputs HDMI video with audio embedded in
+the HDMI stream, reads disc images from a FAT32 SD card, and takes input from a
+PS/2 keyboard, NES or SNES gamepads, or USB HID devices.
+
+The emulation engine is **B-em** by Tom Walker, vendored in `src/bem/`. The parts
+that make it fit on a microcontroller come from Graham Sanderson's Pico fork of
+B-em: the Thumb-assembly 6502 core, the raw-row rasteriser, the sector-streaming
+disc loader, and the `x_gui` display abstraction. The work original to this
+repository is the platform layer in `src/frank/` and `drivers/`.
+
+The port is thin and disciplined. Local modifications to vendored B-em code total
+about 104 lines across six files, which keeps an upstream rebase feasible. Keep
+it that way: new work belongs in `src/frank/`, not in patches to `src/bem/`.
+
+### It is not a beebjit port
+
+The project started as a port of **beebjit**, a different emulator, and was
+rewritten onto B-em in commit `2c71dad`. The beebjit core was deleted. Some of
+its platform layer and its documentation were not.
+
+If you encounter any of the following, you are looking at the abandoned first
+architecture and it does not apply:
+
+- the name beebjit
+- a path under `src/micro/`
+- `k_cpu_mode_interp`, `inturbo`, a JIT, `accurate_flag`,
+  `bbc_cycles_timer_callback`, `wakeup_rate`
+- any file in `src/Pico/` other than `ui_draw.c`, `ui_font.c`, `ui_draw.h` and
+  `fpu_enable.h`
+
+## 2. Do not follow `PERFORMANCE.md`
+
+`PERFORMANCE.md` is stale and will waste your time. It describes the project as a
+beebjit port, directs you to edit files that are not compiled, and states that
+the firmware runs at 28 percent of real time as the outstanding problem. That was
+solved in commit `c149034` by integrating the Thumb 6502 core, which the document
+does not mention. Its "no overclocking" rule is also contradicted by the
+composite driver, which forces 378 MHz.
+
+The parts still worth keeping are in section 8 below.
+
+## 3. Which files are live
+
+`CMakeLists.txt:400-414` is the authoritative application source list. Check it
+before assuming a file matters.
+
+### Compiled
+
+| Layer | Location | Role |
+|---|---|---|
+| Application and port | `src/frank/`, 11 `.c` files | `main()`, board and clock init, SD init, the frame loop, PS/2 to BBC key matrix, the F11 and F12 overlays, settings and INI persistence, disc mounting, screenshots, the audio bridge |
+| Overlay drawing | `src/Pico/ui_draw.c`, `ui_font.c` | 8bpp framebuffer primitives and a 6x8 font |
+| 6502 CPU | `src/bem/thumb_cpu/` | Thumb-assembly core plus an event-driven hardware scheduler. On by default, `CMakeLists.txt:312` |
+| Emulation core | 39 files in `src/bem/`, `CMakeLists.txt:345-383` | CRTC, Video ULA, System and User VIA, WD1770, SN76489, memory, model handling |
+| Pico emulation glue | `src/bem/pico/video/`, `pico/audio/`, `pico/sector_read/`, `pico/roms/`, `pico/stub_allegro5/` | Rasteriser, audio shim, sector streaming, embedded ROMs, Allegro replacement |
+| Platform drivers | `drivers/` | Three video variants, three audio backends, SD, PS/2, NES pad, USB HID, PSRAM, crash handler |
+
+Roughly 13,000 of the repository's 180,000 tracked lines are actually compiled.
+
+### Not compiled, and it cannot be
+
+32 of the 34 files in `src/Pico/` are never built and **will not compile if you
+add them**. They include beebjit headers that no longer exist: `bbc.h`,
+`bbc_options.h`, `cpu_driver.h`, `interp.h`, `inturbo.h`, `jit.h`, `render.h`,
+`state.h`, `state_6502.h`, `teletext.h`, `util.h`, `wd_fdc.h`, `debug.h`, seven
+`disc_*.h` headers and ten `os_*.h` headers.
+
+Four shadow the live implementation by name. When you search for a feature you
+will find two candidates; the live one is always the `frank_` file.
+
+| Dead | Live |
+|---|---|
+| `src/Pico/micro_ui.c` | `src/frank/frank_ui.c` |
+| `src/Pico/micro_settings.c` | `src/frank/frank_settings.c` |
+| `src/Pico/micro_loader.c` | `src/frank/frank_loader.c` |
+| `src/Pico/micro_serial_console.c` | `src/frank/frank_console.c` |
+
+Two are worse than dead. `micro_settings.c` uses the **same** `/micro/micro.ini`
+path as the live code but a different schema. And `micro_serial_console.c`
+defines the line-based protocol (`PING`, `DISK A INSERT`, `SPEED`) that both
+`tools/micro_console.py` and `PERFORMANCE.md` document as if it were live; the
+real console takes single bytes only.
+
+`tools/micro_console.py` is frank-cpc's script, speaks that dead protocol, and
+cannot work. Do not use it as a reference. Note that not everything in `tools/`
+is dead: `tools/tlv320_clocks.py` is live and current, and is where the Fruit Jam
+audio codec's clock arithmetic lives.
+
+### Not compiled, vendored
+
+About 31,000 lines omitted entirely: `src/bem/NS32016/` (32016 second processor),
+`src/bem/resid-fp/` (SID), `src/bem/darm/` (ARM disassembler),
+`src/bem/mc6809nc/` (6809). A further roughly 33,000 lines at the `src/bem/` top
+level, including `z80.c`, `x86.c`, `65816.c`, `arm.c`, `vdfs.c`, `debugger.c`,
+`savestate.c` and the root `video.c`.
+
+The whole `src/bem/pico/x_gui/` implementation is dead. `x_gui.h` is used purely
+as an interface contract, and `src/frank/frank_gui.c` and `frank_audio.c` supply
+the hooks.
+
+### Dead files among the live ones
+
+- `frank_disc_preload()`, `src/frank/frank_disc.h:19` and `frank_disc.c:209`.
+  Never called. Still hardcodes a Prince of Persia path at `frank_disc.c:30`.
+- `drivers/HDMI_vga_hstx.c`. In no source list, and it would collide with
+  `HDMI_vga.c` if added. It also **cannot** compile: it includes `disphstx.h`
+  from the third-party DispHSTX library, which is not vendored anywhere in this
+  repository. It targets analogue VGA for a 360x240 Amstrad CPC framebuffer, so
+  it is not a starting point for an HSTX driver either.
+- `HAS_HSTX`, defined at `src/board_m2.h:21` and used nowhere in the tree.
+  Nothing in frank-micro touches the HSTX peripheral, including the
+  `frank-hdmi-sound` submodule. Ignore the claim at `src/board_m2.h:12-13` that
+  HSTX HDMI is the default video and audio path; it is inherited from frank-cpc
+  and is false. See `docs/INVESTIGATION.md`.
+- `drivers/sdcard/pio_spi.c`. Every call site is behind `#ifdef SDCARD_PIO`, which
+  is never defined.
+- `drivers/tv/CMakeLists.txt`, `src/bem/pico/CMakeLists.txt` and
+  `src/bem/thumb_cpu/CMakeLists.txt` are never included. Note the consequence:
+  `src/bem/pico/memmap_b-em.ld` is **not** used, so the build takes the SDK
+  default linker script and default 2 KB stacks.
+- The `config_values[]` table at `src/bem/pico/stub_allegro5/al_stub.cpp:314-402`.
+
+## 4. A compiled file does not mean a live feature
+
+This is the easiest way to reach a wrong conclusion here.
+
+`CMakeLists.txt:476-486` disables more than thirty B-em features through
+`NO_USE_*` macros while their `.c` files stay in the build and reduce to stubs.
+Sixteen files are in that state, including `adc.c`, `i8271.c`, `ide.c`, `scsi.c`,
+`csw.c`, `uef.c`, `fdi.c`, `pal.c`, `joystick.c`, `mouse.c`, `music5000.c` and
+`ddnoise.c`.
+
+Before concluding a feature exists, grep `CMakeLists.txt` for `NO_USE_` plus its
+name.
+
+### Known limitations, none of them in the README
+
+- **All disc images are read-only.** `NO_USE_DISC_WRITE` at `CMakeLists.txt:486`,
+  and `src/bem/sdf-acc.c:419-421` answers every write with `fdc_writeprotect()`.
+  `*SAVE`, `*SPOOL`, game saves and high-score tables all fail.
+- **The Intel 8271 is not emulated.** `NO_USE_I8271` at `CMakeLists.txt:478`
+  wraps the whole of `src/bem/i8271.c`. Only the WD1770 is live. A model
+  selecting `FDC_I8271` is silently routed to the WD1770 by
+  `src/bem/thumb_cpu/src/cpu_mem.c:419-446`.
+- **MODE 0 and MODE 3 lose half their horizontal resolution.**
+  `src/frank/frank_gui.c:134-135` point-samples 640 engine pixels into a 320-wide
+  framebuffer. Lossless for the 40-column modes, where the engine doubles each
+  pixel; lossy for the 80-column ones, where 80-column text aliases badly. The
+  comment above it defends the approach by counting colours, which is not the
+  quantity being lost.
+- **Only 8 physical colours.** `rgb555_to_bbc()` at `src/frank/frank_gui.c:59-64`
+  thresholds each channel and returns 0 to 7. No Video NuLA palette.
+- **No tube coprocessors, no SID, no save states, no VDFS, no tape loaders.**
+  `tape.c` is compiled with tape enabled but both loaders off, which leaves a
+  latent null function pointer in `tape_close()`.
+
+## 5. Building
+
+### Prerequisites
+
+1. Pico SDK 2.0 or newer, with `PICO_SDK_PATH` exported.
+2. `arm-none-eabi-gcc`.
+3. **Ruby, with `erb`.** `CMakeLists.txt:319` requires Ruby to generate the 6502
+   dispatch tables from `src/bem/thumb_cpu/gen/gen_asm.rb`, and that script does
+   `require 'erb'` at its line 7. Installing Ruby is not always enough: on Arch
+   the base `ruby` package omits `erb`, and the build dies at 56 percent with
+   `cannot load such file -- erb`. Install `ruby-erb` (or the full Ruby stdlib).
+   The README mentions none of this.
+4. **A C library for the ARM toolchain.** On Arch, `arm-none-eabi-newlib` is an
+   *optional* dependency of `arm-none-eabi-gcc`, so installing the compiler alone
+   gives you `cannot find -lg` / `cannot find -lc` at the first link
+   (`bs2_default.elf`). Install it explicitly.
+5. **The `frank-hdmi-sound` submodule**, for the default video driver:
+   `git submodule update --init --recursive`. Note the directory is
+   `frank-hdmi-sound` while the repository is `frank-hdmi-audio`, and it tracks a
+   moving branch rather than a tag.
+6. **The Pico SDK's own submodules**, in the SDK directory:
+   `git submodule update --init`. Without `lib/tinyusb` the build still
+   **succeeds** but `pico_enable_stdio_usb()` silently does nothing, and you get
+   a firmware with no console at all. See the warning under Console output
+   below.
+
+### Optimisation levels differ between targets
+
+Nothing sets `CMAKE_BUILD_TYPE`, but the Pico SDK defaults it to `Release`, so
+`CMAKE_C_FLAGS_RELEASE` is `-g -O3 -DNDEBUG`. That means assertions are compiled
+out and everything is optimised. Verified on a real configured build.
+
+The two tiers differ, and the direction is easy to get backwards:
+
+| Target | Flags | Effective |
+|---|---|---|
+| `drivers`, `ps2_driver`, `tv_driver` | `-DNDEBUG -O3` | `-O3` |
+| `frank-micro` | `... -O3 -DNDEBUG -std=gnu11 -O2 ...` | **`-O2`**, because the explicit `-O2` at `CMakeLists.txt:523` comes last and wins |
+
+So the application layer, the B-em core and the Thumb 6502 CPU are at `-O2`
+while the drivers are at `-O3`. If you are chasing emulation speed, that is
+where to look first. Confirm before benchmarking:
+
+```bash
+grep -- -O build/CMakeFiles/frank-micro.dir/flags.make
+grep -- -O build/CMakeFiles/drivers.dir/flags.make
+```
+
+### Commands
+
+```bash
+./build.sh                                    # default: m2, HDMI with embedded audio
+PLATFORM=m1 ./build.sh                        # Murmulator 1.x
+PLATFORM=z0 ./build.sh                        # Waveshare RP2350-PiZero
+HDMI_DRIVER=HDMI_PIO ./build.sh               # PIO HDMI or VGA, I2S/PWM audio
+HDMI_DRIVER=COMPOSITE ./build.sh              # composite PAL/NTSC TV
+USB_HID=1 ./build.sh                          # USB HID input
+./release.sh 1.00                             # all eight variants into release/
+```
+
+Output is `build/frank-micro.uf2`.
+
+**`build.sh` deletes `build/` and rebuilds everything every time**
+(`build.sh:20`), which means recompiling about 180,000 lines and regenerating the
+6502 tables. For an incremental build after the first configure, use
+`cmake --build build -j8`.
+
+`release.sh` sends all build output to `/dev/null` (`:113-119`), so a failed
+variant tells you nothing. It also writes `version.txt` before building
+(`:91`), so a failed release still consumes a version number.
+
+### Options
+
+| Variable | Default | Effect |
+|---|---|---|
+| `PLATFORM` | `m2` | `m1`, `m2`, `z0` |
+| `HDMI_DRIVER` | `HDMI_PIO_AUDIO` | see below |
+| `CPU_SPEED` | `252` | core clock in MHz |
+| `USB_HID` | `0` | `1` enables the USB HID host and disables USB CDC stdio |
+
+`build.sh` maps the `USB_HID` environment variable to the `USB_HID_ENABLED` CMake
+option; the two names differ.
+
+### The three video builds
+
+| `HDMI_DRIVER` | Drivers | Audio | Constraints |
+|---|---|---|---|
+| `HDMI_PIO_AUDIO`, default | `HDMI_audio.c`, `HDMI_vga.c`, `CMakeLists.txt:153-154` | HDMI-embedded, plus I2S and PWM | Needs the submodule, `:142`. Audio resampled 31250 to 32000 Hz, `:150` |
+| `HDMI_PIO` | `HDMI.c`, `hdmi_scanline.S`, `HDMI_vga.c`, `:266-268` | I2S and PWM only | HDMI or VGA detected at runtime from the ribbon. Note it defines `HDMI_PIO=1` on the `drivers` library but not on `frank-micro`, so application code detects it by the absence of the other two macros |
+| `COMPOSITE` | `HDMI_tv.c` plus `tv_driver`, `:194-197`, `:228` | I2S and PWM only | Forces 378 MHz, `:51-54`. Fatal on z0, `:44-46` |
+
+### Clock and voltage
+
+`CMakeLists.txt:68-74` derives the regulator voltage from `CPU_SPEED`: 1.50 V
+below 300 MHz, 1.60 V from 300, 1.65 V from 504. The default of 252 MHz is not
+arbitrary; HDMI PIO timing is calibrated against it at `drivers/HDMI.c:637-638`.
+On z0 anything above 300 is silently clamped back to 252 (`:60-62`).
+
+Note that `src/frank/frank_platform.c:308-313` gates the voltage and flash-timing
+setup on `CPU_CLOCK_MHZ > 252`, so at the default clock neither runs.
+
+### Console output
+
+`CMakeLists.txt:562` disables UART stdio unconditionally. `:567-571` disables USB
+CDC when `USB_HID_ENABLED` is set, and `release.sh:117` sets it for every release
+variant. **Release firmware has no console at all.** The README's advice to use
+UART instead is wrong as the build stands.
+
+There is a second, quieter way to end up mute. If the SDK's `lib/tinyusb`
+submodule is not initialised, `pico_enable_stdio_usb(frank-micro 1)` is a no-op:
+CMake prints one warning at configure time, the build succeeds, and the ELF
+contains the stdio framework with **no output driver registered at all**. A
+default `USB_HID=0` build that should have USB CDC then has nothing. Check with:
+
+```bash
+arm-none-eabi-nm build/frank-micro.elf | grep -E 'stdio_(usb|uart)'
+```
+
+An empty result means every `printf` in the firmware goes nowhere.
+
+## 6. Runtime architecture
+
+### Core split
+
+Core 0 runs everything: the 6502, the CRTC and ULA, the rasteriser, the sound
+generator, keyboard polling, the serial console, the UI overlay, and SD card
+reads. Core 1 is the video encoder.
+
+- `HDMI_PIO_AUDIO`: `multicore_launch_core1(frank_hdmi_run_core1)` at
+  `src/frank/frank_platform.c:392`.
+- `COMPOSITE`: `tv_core1_run` at `drivers/HDMI_tv.c:107`.
+- `HDMI_PIO`: core 1 is never launched. The DMA handler is installed by core 0.
+  The `..._core1` names in `drivers/HDMI.c:501` and `:506` are misleading
+  leftovers.
+
+`SINGLE_CORE` at `CMakeLists.txt:471` documents the intent but has no effect: its
+only use is inside a `DISPLAY_WIRE` block that `X_GUI` disables at
+`src/bem/pico/video/display.h:17-20`.
+
+### Boot sequence
+
+`main()` is `src/frank/frank_platform.c:306`. In order: FPU enable, voltage and
+flash timing for overclocks (`:308-313`), clock set with a 252 MHz fallback
+(`:314-315`), stdio (`:317`), a 1.5 second USB CDC enumeration wait when USB HID
+is off (`:322`), previous-run crash report (`:325`), crash handler and watchdog
+(`:333`), PSRAM probe (`:341`), PS/2 (`:344`), USB HID (`:349`), NES pad (`:355`),
+video (`:382-389`), core 1 (`:392`), SD mount (`:401`), halt on no card (`:403`),
+settings load (`:409`), then B-em's `main` (`:412`).
+
+### The real frame loop
+
+B-em's `main_run()` calls `al_wait_for_event()`, which always returns a timer
+event (`src/bem/pico/stub_allegro5/al_stub.cpp:784-787`), so one iteration is one
+50 Hz frame. `m6502_exec()` runs 40,000 cycles, being 20 ms of BBC time at 2 MHz
+(`src/bem/thumb_cpu/src/adapter.c:129-137`).
+
+Two frank hooks are called from `al_stub.cpp:708-711`: `frank_keyboard_poll()`
+and `frank_perf_tick()`. **`frank_perf_tick()` at
+`src/frank/frank_platform.c:75-168` is the application's real main loop.** Per
+frame it does first-frame init (`:83-92`), the autoboot state machine (`:95-98`),
+the serial console poll (`:102-104`), the watchdog feed (`:107`), and the 50 Hz
+pacer (`:120-133`) via `busy_wait_until`. Burning core 0 in the pacer is
+deliberate: the asm core is faster than real time at 252 MHz.
+
+### Event-driven hardware, not per-cycle polling
+
+`USE_HW_EVENT` (`CMakeLists.txt:497`) replaces B-em's per-cycle `polltime()` with
+a sorted event queue. `advance_hardware()` at
+`src/bem/thumb_cpu/src/cpu_mem.c:236-276` pops due events and invokes them.
+Registered events include video horizontal total, sound every 16,384 cycles, the
+three VIA timers, the ACIA, and the FDC. If you add emulated hardware that needs
+timing, register an event rather than polling.
+
+The RP2350 interpolator is used for address decode:
+`src/bem/thumb_cpu/src/cpu/cpu.c:281-290` points `interp0->base[0]` at the memory
+handler table, which is why `hardware_interp` is linked at `CMakeLists.txt:503`.
+
+### Video path
+
+B-em is built with `X_GUI` and `SINGLE_CORE`, so it rasterises each scanline
+synchronously on core 0 into a flat 640-pixel RGB555 row.
+`src/frank/frank_gui.c` converts each row to an 8-bit palette index and writes
+it, downscaled 2:1 horizontally, into a 320x256 framebuffer that core 1 scans
+out.
+
+| Step | Location |
+|---|---|
+| Framebuffer, double-buffered 320x256 8bpp, 160 KB | `src/frank/frank_gui.c:30` |
+| Row start, buffer flip | `frank_gui.c:146-158` (`x_gui_begin_scanline`) |
+| Per-row blit | `frank_gui.c:128` (`blit_row`) |
+| Teletext MODE 7 blit | `frank_gui.c:94` (`blit_row_teletext`) |
+| Screenshot, UI overlay, present | `frank_gui.c:165-180` (`x_gui_end_scanline`) |
+| CRTC and ULA timing | `src/bem/pico/video/video.c` |
+| Rasteriser | `src/bem/pico/video/display.c`, `pixels.S` |
+
+The buffer flip happens at the **start** of each frame (`frank_gui.c:149`), so
+during rendering `current_buffer` is the buffer being written and
+`!current_buffer` is the completed one that core 1 displays. Do not "fix" the
+apparent inversion in `drivers/HDMI.c:441`; it is correct.
+
+MODE 7 has a dedicated renderer because the generic path looked wrong. It samples
+the six SAA5050 glyph columns that survive at full intensity, at offsets
+`{0,2,5,8,11,14}` (`frank_gui.c:96`). That is commit `5f6666f`.
+
+`frank_gui.c:39-49` explains why the frame number is encoded into `scanline_id`:
+the rasteriser uses it to pad each frame to exactly 256 scanlines, and without it
+a program that reprograms the CRTC mid-frame desyncs the accounting.
+
+#### The two PIO video drivers are different designs, not two spellings of one
+
+Both emit TMDS from PIO state machines, and neither uses the RP2350's HSTX
+peripheral. Beyond that they share almost nothing, so do not carry an assumption
+from one across to the other.
+
+**`HDMI_PIO`, in `drivers/HDMI.c`.** Two state machines and four DMA channels,
+with no per-pixel CPU work at all. TMDS is precomputed: `tmds_encoder()` at
+`:346` is the real 8b/10b algorithm but runs once at init to fill
+`tmds_table[256]` (`:157`), and `graphics_convert_all_palette()` at `:777`
+pre-serialises each palette entry into a differential word (`:787`). So encoding
+cost is paid per palette change, not per pixel.
+
+The palette lookup is then done by PIO and DMA between them, which is the part
+worth understanding before touching this file:
+
+1. `dma_chan` streams a 400-byte scanline of palette indices, 8 bits at a time,
+   into `SM_conv`'s TX FIFO (`:660-668`).
+2. `SM_conv` turns each index into an address in `conv_color` and pushes it out
+   its **RX** FIFO.
+3. `dma_chan_pal_conv_ctrl` reads that RX FIFO and writes it into
+   `dma_chan_pal_conv`'s `read_addr` register (`:726-732`), so a PIO output
+   becomes a DMA read address.
+4. `dma_chan_pal_conv` moves 4 words from there into `SM_video`'s TX FIFO
+   (`:703-711`).
+5. `SM_video` shifts out to 6 data pins, 3 TMDS pairs, with 2 sideset pins as the
+   clock pair (`:601-602`, `:631`), at a clkdiv calibrated against 252 MHz
+   (`:638`).
+
+Sync and blanking are more byte values in the same line buffer, indices into
+control-code entries at `BASE_HDMI_CTRL_INX`. The per-line ISR
+`dma_handler_HDMI()` at `:374` only swaps the double-buffered line buffer and
+refills the porch bytes. This is why this variant never launches core 1.
+
+**`HDMI_PIO_AUDIO`, the default, in the `frank-hdmi-sound` submodule.** A
+PicoDVI-derived design. Three state machines, one per TMDS lane
+(`frank_serialiser.c:2-3`), and TMDS encoded **on the CPU, per scanline, in
+hand-written assembly**: `frank_tmds.S`, entered through
+`tmds_encode_data_channel_8bpp` and `..._16bpp` at `frank_tmds.c:83` and `:108`,
+against a table pinned in `SCRATCH_X` (`frank_tmds.c:25`).
+
+That CPU cost is why this variant launches core 1 and `HDMI_PIO` does not. What
+it buys is `frank_data_packet.c`: HDMI data islands, small TERC4-encoded packets
+inserted into the horizontal blanking interval, which is how audio is embedded in
+the stream. Widths are at `frank_data_packet.h:23-26` and `:37`. `HDMI_PIO`
+cannot do this, which is why it is I2S and PWM only.
+
+It is also why the audio path resamples to 32,000 Hz rather than sending 31,250
+(`CMakeLists.txt:144-150`). An HDMI sink derives its audio clock from N and CTS
+values carried in a data island, and those are tabulated per standard sample
+rate. 31,250 is not a standard rate.
+
+A note for anyone tempted by HSTX: it does TMDS encoding in hardware, but it has
+no palette lookup and no TERC4 mode, so it would need a CPU index-to-RGB565 pass
+per line and would give up HDMI audio unless data islands were reimplemented
+through its raw shift path. `docs/FRUIT-JAM.md` section 6 option B has the detail
+and the register citations. It is a trade, not an upgrade.
+
+### Audio path
+
+The SN76489 produces samples at 31,250 Hz. A hardware event every 16,384 cycles
+drives `sound_poll_n()` (`src/bem/pico/audio/audio.c:571`), which fills a single
+static 882-sample mono buffer and hands it to `give_audio_buffer()` at
+`src/frank/frank_audio.c:195`. That is about 28 ms per handoff.
+
+`give_audio_buffer()` branches on the active backend. **It must never block the
+producer**, and today two of the three paths can:
+
+| Backend | Path | Note |
+|---|---|---|
+| I2S | `frank_audio.c:204-220` | native 31250 Hz, mono to stereo, software volume, blocking `i2s_dma_write` |
+| PWM | `:222-232` | native, blocking push |
+| HDMI | `:235-253` | exact fixed-point resample 31250 to 32000 Hz, flushed in 128-frame blocks |
+
+The 32,000 Hz choice is explained at `CMakeLists.txt:144-150`: real HDMI sinks
+mishandle the non-standard 31,250 Hz and drop a sample every few seconds.
+
+Backend switching is live, in `frank_audio_set_driver()` at
+`src/frank/frank_audio.c:123`. I2S and PWM share pins on **all three** boards, so
+the switch re-muxes them: `i2s_claim_pins()` at `:65`, `pwm_claim_pins()` at
+`:71`. Known rough edges: the abandoned backend is never actually stopped, only
+silenced; `i2s_quiet()` can spin for up to about 56 ms; and the HDMI resampler
+keeps stale state across switches.
+
+### PIO, DMA and interrupt budget
+
+**PIO1 is exactly full at four state machines in every configuration**, and one
+is wasted. Check this table before adding any PIO consumer.
+
+| Block | Claimant | State machines |
+|---|---|---|
+| PIO0 | video, whichever driver is built | 1 to 3 |
+| PIO1 | PS/2 keyboard | 1 |
+| PIO1 | PS/2 "mouse" | 1, wasted on M1 and Z0 |
+| PIO1 | NES pad | 1 |
+| PIO1 | I2S | 1 |
+
+On M1 and Z0 there is no PS/2 mouse, so `src/board_config.h:72-75` aliases
+`PS2_MOUSE_CLK` to `PS2_PIN_CLK` and the mouse state machine is initialised on
+the same pin as the keyboard. Reclaiming it is the cheapest way to free PIO1
+capacity. Instruction memory is also near the limit at about 27 of 32 words.
+
+DMA: the video drivers claim dynamically; **I2S hardcodes channels 10 and 11**
+(`drivers/audio.c:47-48`) and **PWM hardcodes 8 and 9**
+(`drivers/pwm_audio/pwm_audio.c:67-68`). Interrupts: `DMA_IRQ_1` video,
+`DMA_IRQ_0` I2S, `DMA_IRQ_2` PWM, `PIO1_IRQ_0/1` PS/2, `TIMER0_IRQ_2` composite.
+The comments in `drivers/audio.c:17`, `:135` and `:176` name the wrong IRQ in
+three places; the code is right and the comments are wrong.
+
+### Storage layout
+
+| Path | Contents | Defined at |
+|---|---|---|
+| `/micro/disk/` | disc images | `src/frank/frank_loader.c:20` |
+| `/micro/micro.ini` | settings | `src/frank/frank_settings.c:364` |
+| `/micro/screenshot/` | `BBC_NNNN.BMP`, 8-bit BMP | `src/frank/frank_screenshot.c:57` |
+
+Undocumented behaviour worth knowing: with no `disk_a` set, the loader falls back
+to `/micro/disk/drivea.ssd` and `driveb.ssd`
+(`src/frank/frank_loader.c:133`); mounting into drive 0 triggers an automatic
+SHIFT-BREAK (`src/frank/frank_ui.c:294-296`); the browser caps at 200 entries and
+skips filenames of 64 characters or more, silently
+(`src/frank/frank_loader.c:66`, `:74-75`).
+
+### Memory budget
+
+Measured on linked builds of all eight variants:
+
+| Platform | Driver | Flash | of 4 MB | RAM | of 512 KB |
+|---|---|---|---|---|---|
+| m2 | `HDMI_PIO_AUDIO` | 353,340 | 8.4% | 334,276 | 63.8% |
+| m2 | `HDMI_PIO` | 348,916 | 8.3% | 297,268 | 56.7% |
+| m2 | `COMPOSITE` | 361,288 | 8.6% | 389,172 | 74.2% |
+| m1 | `HDMI_PIO_AUDIO` | 353,340 | 8.4% | 334,276 | 63.8% |
+| m1 | `HDMI_PIO` | 348,908 | 8.3% | 297,268 | 56.7% |
+| m1 | `COMPOSITE` | 373,740 | 8.9% | 393,000 | 75.0% |
+| z0 | `HDMI_PIO_AUDIO` | 366,128 | 8.7% | 336,136 | 64.1% |
+| z0 | `HDMI_PIO` | 361,208 | 8.6% | 299,128 | 57.1% |
+
+Plus, for the default m2 `HDMI_PIO_AUDIO` build: `SCRATCH_X` 2,404 B of 4 KB
+(58.7%), `SCRATCH_Y` 2,688 B of 4 KB (65.6%), `XIP_RAM` unused.
+
+**Budget new allocations against `COMPOSITE`, not the default.** It is the tight
+one at 75.0% of RAM, about 96 KB above `HDMI_PIO`, because of the 76.8 KB
+`tv_frame` buffer at `drivers/HDMI_tv.c:70`. It also runs at 378 MHz and 1.60 V.
+
+**The 4 KB scratch banks are the real constraint**, both about two thirds full,
+with far less headroom than the RAM figure suggests. Flash is under 9% in every
+variant.
+
+Of the RAM, two 320x256 framebuffers at 160 KB
+(`src/frank/frank_gui.c:30`), 64 KB BBC RAM, 64 KB Master sideways RAM, two
+640-entry work rows. Composite adds a 76.8 KB `tv_frame`
+(`drivers/HDMI_tv.c:70`). The audio layer holds about 11 KB of static buffers
+regardless of the selected backend. PSRAM is optional and, in practice, is used
+only for FatFs long-filename work buffers via
+`drivers/fatfs/ffsystem.c:24`.
+
+## 7. Where to change what
+
+| To change | Go to |
+|---|---|
+| Boot sequence, clocks, SD init, the frame loop and pacer | `src/frank/frank_platform.c` |
+| The F12 settings menu or F11 disc browser | `src/frank/frank_ui.c` |
+| A new setting, or INI persistence | `src/frank/frank_settings.c` and `.h` |
+| Disc image browsing and directory walking | `src/frank/frank_loader.c` |
+| Mounting, ejecting, SHIFT-BREAK autoboot, sector reads | `src/frank/frank_disc.c` |
+| PS/2 or gamepad to BBC key matrix | `src/frank/frank_keyboard.c` |
+| Audio backend behaviour or the live switch | `src/frank/frank_audio.c` |
+| Scanline conversion, palette, MODE 7 | `src/frank/frank_gui.c` |
+| Screenshot capture and BMP writing | `src/frank/frank_screenshot.c` |
+| Overlay text and box drawing | `src/Pico/ui_draw.c`, `ui_font.c` |
+| Which model boots, and its ROMs | `src/bem/pico/stub_allegro5/al_stub.cpp:286-311` |
+| Pin assignment for a board | `src/board_m1.h`, `board_m2.h`, `board_z0.h` |
+| HDMI, VGA or composite output | `drivers/HDMI*.c`, `drivers/tv/` |
+| I2S or PWM output | `drivers/audio.c`, `drivers/pwm_audio/` |
+| Emulated hardware timing | register a `hw_event`, see section 6 |
+
+## 8. Hardware constraints
+
+The first four are carried over from `PERFORMANCE.md`. They were written from
+experience with the earlier firmware and have **not been re-verified** against
+the current build, but the hardware behaviour is unchanged and the cost of
+ignoring them is high.
+
+1. **Ask the user to enter BOOTSEL mode before every flash.** Bad firmware
+   reliably drives the RP2350 into a Cortex-M33 hardware lockup at
+   `PC=0xEFFFFFFE` that survives reset, flash erase and SRST. Do not fight the
+   lockup over SWD. Have the user hold BOOTSEL while plugging in USB, or BOOTSEL
+   plus a tap of RESET, then flash. Note that `flash.sh:22` uses
+   `picotool load -f` while `PERFORMANCE.md` insists on `-x`; the two disagree
+   and nobody has reconciled them.
+2. **Diagnose over SWD, not by polling the serial port.** Attach OpenOCD and GDB
+   and read the PC and stack directly. `CFSR` is at `0xe000ed28`, `BFAR` at
+   `0xe000ed38`. Remember that release builds have no serial console at all.
+3. **Do not raise the clock to buy performance.** HDMI PIO timing is calibrated
+   against 252 MHz. Composite is the one exception and sets 378 MHz itself.
+4. **Core 1 must stay resident in RAM and must never block.** It is scanning out
+   video in real time.
+5. **PSRAM is optional and not required.** Detected and initialised if present
+   (`drivers/psram_init.c`). Keep emulation hot paths out of it. A stock Pico 2
+   with no PSRAM is a supported configuration. On **M1 only**, the PSRAM
+   chip-select pin (GPIO 8) is also HDMI D0 minus, and `psram_init` muxes the pin
+   to `XIP_CS1` before probing and leaves it there on failure. It survives only
+   because `graphics_init()` re-muxes later.
+6. **Do not let `printf` block core 0.** `CMakeLists.txt:576` sets
+   `PICO_STDIO_USB_STDOUT_TIMEOUT_US=0` so USB CDC writes drop characters rather
+   than stalling. Commit `82469e5` exists because this caused audio dropouts.
+   `FRANK_PERF_LOG` is off by default for the same reason.
+7. **Keep work out of the per-scanline hook.** `x_gui_end_scanline()` currently
+   performs the screenshot write there, an 84 KB SD write inside the video path.
+   Do not add to it.
+
+## 9. Verifying a change
+
+There is no CI and there are no tests. Every check is manual and on hardware.
+
+**Only Fruit Jam hardware is available to this project, and only from the point
+one arrives.** The `m1`, `m2` and `z0` platforms cannot be tested at all, so
+treat them as frozen: prefer additive, platform-gated changes to shared code, and
+where shared code must change in place, write down why the existing boards are
+unaffected. See `docs/HANDOFF.md`.
+
+The cheapest useful check needs no board: configure and compile all eight release
+variants. That alone catches broken source lists, missing dependencies and
+dead-file mistakes. **All eight pass as of this writing**, so a failure means you
+broke something.
+
+```bash
+for p in m2 m1 z0; do for d in HDMI_PIO_AUDIO HDMI_PIO COMPOSITE; do
+  [ "$p" = z0 ] && [ "$d" = COMPOSITE ] && continue
+  PLATFORM=$p HDMI_DRIVER=$d ./build.sh || echo "FAILED: $p $d"
+done; done
+```
+
+On hardware, exercise the paths that cross driver boundaries:
+
+- Cold boot to the Acorn MOS screen.
+- A MODE 7 teletext screen and at least one bitmap mode; they take different blit
+  paths in `frank_gui.c`.
+- Mount a disc from the F11 browser and SHIFT-BREAK autoboot it.
+- All three audio backends, switched live from F12, checking that the backend you
+  left is not still driving its pins.
+- PS/2 keyboard, including F11, F12, Print Screen and Ctrl+Alt+Del.
+- A screenshot, then confirm the BMP on the card.
+- Boot with **no SD card**, and confirm the error screen stays up rather than
+  rebooting every few seconds. It currently does not; see
+  `docs/INVESTIGATION.md` finding 4.
+- Several minutes of running, to catch a watchdog reset or lockup.
+
+Report what you actually ran. If you could not test on hardware, say so.
+
+## 10. Conventions
+
+- **Licence headers.** The port's own files carry a `frank-micro` header with
+  `SPDX-License-Identifier: GPL-3.0-or-later`. Vendored trees keep their upstream
+  headers; do not stamp over them.
+- **27 files under `drivers/` currently carry the wrong project header**, naming
+  `frank-cpc` and its URL. If you touch one of those files, fix its header. Two
+  vendored components, `drivers/tv/` and `drivers/ps2/`, have no attribution at
+  all. See `docs/INVESTIGATION.md` findings 7 and 8.
+- **Licence compatibility.** The vendored B-em code is GPL-2.0-**or-later**,
+  which is what permits the GPLv3 combination. Do not vendor GPL-2.0-only code.
+  Separately, the repository contains copyrighted Acorn ROM images and third-party
+  disc images that cannot be licensed under GPLv3; be aware before publishing
+  anything derived from the tree.
+- **Commit messages.** `.githooks/commit-msg` rejects AI attribution trailers,
+  but it is **not active**: `core.hooksPath` is unset and `.git/hooks/commit-msg`
+  does not exist, so nothing runs it unless someone configures
+  `git config core.hooksPath .githooks`. Treat the intent as the house rule
+  regardless: no `Co-Authored-By` or `Generated with` lines naming an AI tool.
+- **Author identity.** File headers give `xtreme@rh1.tech`; all commits are
+  authored as `xtreme@rh1.ru`. Ask before changing either.
+- **Do not add to `src/bem/`.** New work belongs in `src/frank/`. The vendored
+  divergence is currently about 104 lines and is worth keeping small.
+
+## 11. Known problems
+
+Full detail and citations in `docs/INVESTIGATION.md`. Ranked.
+
+| Area | Problem |
+|---|---|
+| Build | Two undocumented prerequisites beyond the README: Ruby's `erb`, and the SDK's own `lib/tinyusb` submodule, whose absence silently produces firmware with no console |
+| Docs | `PERFORMANCE.md` describes a different emulator |
+| Dead code | 32 unbuildable files in `src/Pico/`, two of which shadow live behaviour |
+| Boot | The no-SD error screen reboots on the watchdog instead of halting |
+| Emulation | `src/bem/acia.c:28` passes the wrong object to the ACIA timer callback |
+| Licensing | Copyrighted ROM and disc images conflict with GPLv3 redistribution |
+| Attribution | 27 driver files name the wrong project; `drivers/tv/` has no licence at all |
+| Build | Ruby is required and undocumented |
+| Build | Release firmware has no console; the README says to use UART |
+| Hygiene | No `-Wall` anywhere, and thirteen `-Wno-` suppressions |
+| Robustness | Settings save truncates first, ignores every write result, and runs on every keypress |
+| UX | A Model change is written to the card before the user confirms it |
+| Input | Gamepad keys stick if the preset changes mid-press |
+| Drawing | `ui_draw` primitives do not clip; `put_pixel` has no bounds test at all |
+| Drivers | `HDMI_vga.c:432-436` re-bases PIO GPIO to 32, which `HDMI.c:534-538`'s own comment calls invalid on RP2350; unreachable today only because the Z0 forces `SELECT_VGA = false` |
+| Drivers | The I2S pin-mux maps any non-pio0 block to `GPIO_FUNC_PIO1` (`drivers/audio.c:99`, `frank_audio.c:66-68`); wrong for PIO2, latent until anything uses it |
+| Concurrency | PS/2 ring buffers are drained from both an interrupt and a poll path with no masking |
+| Resources | PIO1 is exactly full, with one state machine wasted on a nonexistent mouse |
+| Tooling | `tools/micro_console.py` is another project's script and speaks a dead protocol |
+| Build | Application and emulation core build at `-O2` while drivers build at `-O3`; undocumented and possibly unintended |
+| Process | No CI, no tests |
