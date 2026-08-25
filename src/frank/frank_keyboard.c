@@ -258,12 +258,18 @@ static void frank_usb_keyboard_poll(bool *ctrl_held, bool *alt_held) {
 static bool s_nespad_ok = false;
 
 void frank_gamepad_init(void) {
+    /* A board with no NES/SNES pad connector (HAS_NESPAD undefined) declares
+     * no pad pin numbers.  s_nespad_ok then stays false, which is what makes
+     * the wired-pad branch of frank_gamepad_poll() below a no-op, so nothing
+     * downstream needs its own guard. */
+#ifdef HAS_NESPAD
     uint32_t cpu_khz = clock_get_hz(clk_sys) / 1000;
     s_nespad_ok = nespad_begin(cpu_khz,
                                NESPAD_GPIO_CLK,
                                NESPAD_GPIO_DATA,
                                NESPAD_DATA_PIN_NONE,
                                NESPAD_GPIO_LATCH);
+#endif
 }
 
 /* Collapse a wired NES/SNES controller word into the FRANK_PAD_* action set. */
@@ -335,9 +341,11 @@ void frank_keyboard_poll(void) {
     usbhid_wrapper_tick();   /* drive the TinyUSB host stack once per frame */
 #endif
 
+#ifdef HAS_PS2
     ps2kbd_tick();   /* drain PIO FIFO -> event queue */
     while (ps2kbd_get_key(&pressed, &sc))
         process_xt_event(pressed, sc, &ctrl_held, &alt_held);
+#endif
 
 #ifdef USB_HID_ENABLED
     frank_usb_keyboard_poll(&ctrl_held, &alt_held);

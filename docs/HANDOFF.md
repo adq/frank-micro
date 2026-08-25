@@ -124,7 +124,331 @@ the firmware did.
 
 ---
 
+### 2026-08-25: the board arrived, and phases 1a and 1b were written
+
+First code for this port. `src/board_fj.h` is new; `CMakeLists.txt`,
+`src/board_config.h`, `src/frank/frank_platform.c`, `frank_keyboard.c`,
+`frank_settings.c`, `frank_audio.c`, `drivers/audio.c`,
+`drivers/ps2/ps2kbd_wrapper.c`, `drivers/usbhid/CMakeLists.txt`,
+`drivers/usbhid/tusb_config.h`, `drivers/usbhid/hid_app.c`, `build.sh` and
+`README.md` were changed. Nothing has been run on hardware yet.
+
+Every variant compiles and links, with `USB_HID` both off and on. The eight
+pre-existing variants are unchanged in behaviour: `m2 HDMI_PIO_AUDIO` with
+`USB_HID=0` comes out at the same RAM figure as before the port and 8 bytes
+more flash, from the three-way funcsel fix described below.
+
+### 2026-08-25: PS/2 and the NES pad are gated by capability macros, not by pin numbers
+
+`HAS_PS2` and `HAS_NESPAD` are now defined in `board_m1.h`, `board_m2.h` and
+`board_z0.h` and deliberately absent from `board_fj.h`, which declares no PS/2
+or pad pin numbers at all. Five sites are guarded on them: the `PS2_MOUSE_CLK`
+aliasing block in `board_config.h`, the `ps2_init()` call in
+`ps2kbd_wrapper.c`, the `ps2kbd_init()` and `frank_gamepad_init()` calls in
+`frank_platform.c`, the PS/2 drain in `frank_keyboard.c`, and the body of
+`frank_gamepad_init()`.
+
+This is the first working use of the `HAS_*` macros, which until now were
+declared in three board headers and read nowhere. Every guard is additive and
+the macro is defined for all three existing boards, so those boards come out of
+the preprocessor identical to before.
+
+### 2026-08-25: the Fruit Jam console is on UART1, not USB
+
+`CMakeLists.txt` turned UART stdio off unconditionally, and turns USB CDC off
+whenever `USB_HID_ENABLED` is set. On the other three boards that coupling is
+right, because USB HID owns the native controller. On the Fruit Jam it is not:
+the host is on PIO and the native controller is unused.
+
+Rather than run a TinyUSB device stack and a host stack in one binary, UART
+stdio is now enabled for `fj` only. The SDK board header puts UART1 on GPIO 8
+and 9, both free on the 2x16 header, so a USB-serial adapter there gives a
+console in every build. Verified with `arm-none-eabi-nm`: the `fj USB_HID=1`
+image contains `stdio_uart` and no `stdio_usb`, where before this change it
+would have contained neither and every `printf` would have gone nowhere.
+
+Attaching a CDC device to the native port as well remains possible and is
+recorded as a finding below, but was not attempted.
+
+### 2026-08-25: `tools/setup.sh` exists because four things were missing
+
+A build on this machine failed before it started. The `frank-hdmi-sound`
+submodule was never initialised, and `CMakeLists.txt` does
+`add_subdirectory(frank-hdmi-sound/src)`, so configure died rather than the
+link. `PICO_SDK_PATH` was not exported and `build.sh` never set it. `picotool`
+and `openocd` were both absent.
+
+`tools/setup.sh` now initialises the submodules, locates the SDK and writes the
+export to `tools/env.sh`, which `build.sh` sources, and reports the rest with
+Arch package names. It exits non-zero on a blocker, so it works as a gate.
+
+### 2026-08-25: phase 2 done, the codec works, and its levels are driven from the F12 volume
+
+`drivers/tlv320dac3100.c` and `.h` are new. `hardware_i2c` was added to all three
+`drivers` link lines and the source to all three source lists; the whole file is
+behind `#ifdef CODEC_I2C_ADDR`, so it compiles to four no-op stubs on the boards
+that have no codec. `frank_platform.c` calls `tlv320_init(31250)` after the SD
+mount and before b-em starts, so a codec that does not answer reports itself on a
+screen that already works and cannot stop the machine booting.
+
+**Confirmed on hardware:** sound from the headphone jack with `Audio Out` set to
+I2S in F12. This is also the first hardware exercise of I2S on PIO2 and therefore
+of the three-way funcsel fix, since a wrong pad function there gives silence.
+
+The clock constants are `P 1, R 2, J 52, NDAC 13, MDAC 2, DOSR 128` from
+`tools/tlv320_clocks.py`, putting the PLL at 104.000 MHz and DAC_MOD_CLK at
+4.000 MHz at 31,250 Hz. No resampler: the rate is native, so the I2S path in
+`frank_audio.c` is unchanged.
+
+Three deliberate departures from pico-mac's sequence, all marked DEPARTURE in the
+source:
+
+- **Register 0x33 is not written.** It configures the codec's GPIO1 as an
+  output, and on this board GPIO 23 joins that pin to the ESP32-C6's
+  `IO9/BOOT9`. Register 0x30, the INT1 routing that goes with it, is also
+  skipped. frank-micro has no use for either.
+- **NADC and MADC, registers 0x12 and 0x13, are not written.** This part is a
+  DAC and has no ADC to divide for.
+- **The 1000 ms post-reset sleep is replaced with the datasheet's figures**, 2 ms
+  after reset and 10 ms after the PLL powers up.
+
+### 2026-08-25: the F12 volume drives the codec's analogue stage, not a software divide
+
+pico-mac hardcodes the analogue output registers at 50 for the headphones and 40
+for the speaker, roughly -26 and -20 dB, and that is what the first working
+version used. On hardware it was clearly audible but too quiet even with
+frank's software volume at 100 percent, which confirmed the analogue stage was
+the whole of the loss.
+
+`tlv320_set_volume()` now maps the 0 to 100 setting onto those registers, with
+100 percent at the codec's 0 dB and 0 percent at about -60 dB. `frank_audio.c`
+hands the codec full-scale samples and skips the software divide whenever a codec
+is present.
+
+Worth understanding rather than just recording: dividing 16-bit samples by up to
+100 in software throws away most of the resolution of an already coarse sound
+source, and the attenuation then happens *before* a heavily attenuated amplifier.
+Doing it in the analogue domain after the DAC costs no resolution at all. The
+software divide is kept for boards with no codec, where I2S feeds a bare DAC with
+no volume control of its own.
+
 ## Findings that changed the plan
+
+### 2026-08-25: do not do I2C from the audio producer path
+
+Recorded because it was introduced, shipped, heard, and removed inside one
+session, and the reasoning error is easy to repeat.
+
+The first codec version had an automute: count consecutive all-silent buffers,
+and mute the output amplifiers after about half a second of silence. Muting the
+amps rather than feeding them zeroes is the right way to kill idle hiss, and the
+check itself is cheap. The mistake was where it ran.
+
+Unmuting takes three register read-modify-writes, so six I2C transfers, and at
+100 kHz that is over a millisecond of blocking. It ran inside
+`give_audio_buffer()`, on **every transition from silence to sound**, which on
+this machine is every note onset. On hardware the I2S backend was audibly worse
+than the HDMI one because of it.
+
+This is the same failure mode as commit `82469e5`, where USB-CDC telemetry
+stalling core 0 caused audio dropouts, and it is what `CLAUDE.md` constraint 6
+is about. The error in reasoning was checking that the *steady state* was cheap
+and not that the *transition* was.
+
+The amps are now unmuted once when the I2S backend is selected and muted once
+when it is left, so steady-state I2C traffic is zero and a volume change costs
+three writes on a keypress. If idle hiss ever justifies an automute, drive it
+from a per-frame tick with a long timeout, never from the producer.
+
+**Confirmed on hardware:** with the I2C removed from the producer path, the I2S
+backend was reported as sounding good. So this was the whole of the complaint,
+and the I2S ring rework described in the next finding was **not** needed. No idle
+hiss was reported either, which is why nothing replaced the automute.
+
+### 2026-08-25: the I2S backend has had none of the dropout work the HDMI path has had
+
+Not a Fruit Jam issue and not new, but it sets expectations for how good I2S can
+sound, so it belongs here.
+
+The HDMI audio path has been through four rounds of dropout engineering: a bigger
+ring with adaptive fill control (`36649a1`), consumer DC-hold on ring underflow
+(`fc1666c`), locking the producer rate to the HDMI audio clock (`f8a4b97`), and
+the move to a standard 32,000 Hz sink rate (`ba215c4`).
+
+The I2S path has none of it. `drivers/audio.c` is a **two**-buffer ping-pong of
+882 frames each, so:
+
+- `i2s_dma_write()` at `:219-244` **spins with interrupts toggling** until a
+  buffer frees, which stalls core 0 and therefore the emulator.
+- The two DMA channels chain to each other unconditionally, so if the producer
+  is late the DMA **replays the stale contents of the buffer it lands on**. The
+  granularity is a whole 882-frame buffer, about 28 ms, which is long enough to
+  hear as a stutter rather than a click.
+
+Fixing it properly means a ring of more, smaller slots with the IRQ advancing
+through them and filling an unwritten slot with a DC hold. That is a
+several-hundred-line change to code shared with three boards that cannot be
+tested, so it needs the additive, platform-gated treatment prescribed above.
+
+**It has not been done, and as of 2026-08-25 there is no evidence it is needed.**
+The one complaint about I2S quality turned out to be the automute above. Do not
+start this speculatively; wait for a symptom that survives the two cheaper
+explanations below.
+
+**Two cheaper explanations to rule out first**, if I2S ever sounds worse than
+HDMI:
+
+1. **Clipping.** At 100 percent the analogue stage now sits at 0 dB with
+   full-scale digital going into it. A few dB of headroom may be all that is
+   wanted; try 85 or 90 percent and listen.
+2. **Different transducers.** HDMI audio comes out of the monitor's speakers and
+   I2S out of the headphone jack or the onboard speaker. Comparing the two is
+   not comparing backends, it is comparing loudspeakers.
+
+### 2026-08-25: correction, the SDK on this machine is 2.2.0, not 2.3.0
+
+The table at the end of this file said Pico SDK tag 2.3.0, commit `98a542c1`.
+`/home/adq/dev/pico-sdk` is at tag `2.2.0`, commit `a1438df`. That is also what
+`CMakeLists.txt:7` pins as `sdkVersion`. Nothing was blocked: the Fruit Jam
+board header is present at 2.2.0, which is the release it arrived in.
+
+### 2026-08-25: correction, phase 1a is not silent
+
+`docs/FRUIT-JAM.md:97` describes phase 1a as having no sound, and the effort
+table repeats it. That is wrong. The default video driver is `HDMI_PIO_AUDIO`
+and `FRANK_AUDIO_DEFAULT` is `FRANK_AUDIO_HDMI`
+(`src/frank/frank_settings.h:51-63`), so audio is embedded in the DVI stream and
+needs nothing on the board. The codec matters only for the headphone jack and
+the onboard speaker.
+
+This has a consequence for phase 2 worth stating plainly: **sound is not a
+reason to write the codec driver.** The reason is the 3.5 mm jack and the
+onboard speaker.
+
+### 2026-08-25: do not use `tannewt/Pico-PIO-USB`; use upstream at the commit TinyUSB pins
+
+The table at the end of this file records reading `tannewt/Pico-PIO-USB` at
+`f3f9d11`, and `docs/FRUIT-JAM.md` builds its PIO analysis on that fork. That
+fork cannot be used here, for two independent reasons.
+
+It has **no TinyUSB integration at all**: `PIO_USB_USE_TINYUSB` appears nowhere
+in it. And its file layout is flat, with no `src/` directory, no
+`pio_usb_host.c`, no `pio_usb_device.c` and no `pio_usb_ll.h`. The Pico SDK's
+TinyUSB glue requires all four of those paths, and `hcd_pio_usb.c` includes
+`pio_usb_ll.h` directly. It is an old fork that predates the split.
+
+The submodule is therefore `sekigon-gonnoc/Pico-PIO-USB` at `lib/Pico-PIO-USB`,
+pinned to `fe9133fc513b82cc3dc62c67cb51f2339cf29ef7`, tagged 0.6.1. That is the
+exact commit TinyUSB 0.18.0 lists for it in `tools/get_deps.py:61-63`, which is
+the version its `hcd_pio_usb.c` is written against. **Do not float this to the
+upstream default branch:** HEAD has since changed the PIO index mapping, so a
+newer commit changes behaviour rather than only fixing bugs.
+
+### 2026-08-25: PIO-USB needs one PIO block and three state machines, and it must be PIO0 or PIO1
+
+This is the question phase 1b was told to settle before any code was written.
+Read from `lib/Pico-PIO-USB/src/pio_usb_configuration.h` and `src/pio_usb.c` at
+the pinned commit.
+
+`pio_usb_configuration_t` carries `pio_tx_num` and `pio_rx_num` as **separate
+fields**, which is what raised the worry that host mode needed two blocks. It
+does not. The defaults are `PIO_USB_TX_DEFAULT 0` and `PIO_USB_RX_DEFAULT 0`
+with `sm_tx` 0, `sm_rx` 1 and `sm_eop` 2, so one block and three state machines,
+and `pio_sm_claim` is called exactly three times.
+
+Two constraints come with it. `pio_usb.c:284` and `:287` map the index with
+`c->pio_tx_num == 0 ? pio0 : pio1`, so **PIO2 is not addressable** at this
+commit. And `pio_usb.c:241` does `pio_add_program_at_offset(pio_usb_tx,
+fs_tx_program, 0)`, so the transmit program must sit at instruction offset 0,
+which means the block has to be one nothing else has programmed.
+
+So the allocation is forced, and it is the one `docs/FRUIT-JAM.md:986-990`
+predicted:
+
+| Block | Claimant | State machines |
+|---|---|---|
+| PIO0 | video, three TMDS serialisers | 3 |
+| PIO1 | PIO-USB | 3, and instruction offset 0 |
+| PIO2 | I2S, once the codec driver exists | 1 |
+
+PIO1 is free for this only because the Fruit Jam has no PS/2 socket and no NES
+pad connector. On the other three boards PIO1 is exactly full.
+
+Note for later: upstream HEAD, `5a37a66`, replaces the one-bit test with
+`pio_get_instance(c->pio_tx_num)` and can reach PIO2. If PIO2 is ever needed for
+USB, that is the change to look for, and it comes with a configuration API that
+TinyUSB 0.18.0's `hcd_pio_usb.c` does not match.
+
+### 2026-08-25: PIO-USB's other resource claims, and why none of them collide here
+
+- **One DMA channel**, `dma_claim_mask(1 << c->tx_ch)` at `pio_usb.c:325`, with
+  a default of channel 0. That default is unusable here, because the video
+  driver claims channels dynamically from the bottom. It is pinned to 7 instead,
+  the highest channel that collides with neither the hardcoded I2S pair at 10
+  and 11 (`drivers/audio.c:47-48`) nor the hardcoded PWM pair at 8 and 9
+  (`drivers/pwm_audio/pwm_audio.c:67-68`). `dma_claim_mask` panics on an
+  already-claimed channel, so this had to be explicit rather than left to
+  initialisation order.
+- **Hardware alarm 2**, from `alarm_pool_create(2, 1)` at `pio_usb_host.c:89`,
+  driving a 1 ms repeating SOF timer. That is `TIMER0_IRQ_2`, which the
+  composite driver also uses; composite is not built on this board, so it is
+  free.
+- The video driver in the `frank-hdmi-sound` submodule claims its DMA with
+  `dma_claim_unused_channel(true)` (`frank_dvi.c:92-93`), so it routes around
+  whatever PIO-USB took regardless of ordering.
+
+### 2026-08-25: the SDK's own TinyUSB supplies every bit of PIO-USB build glue
+
+None of the three earlier revisions of `docs/FRUIT-JAM.md` mentions this, and it
+removes most of what phase 1b was expected to cost.
+
+`pico-sdk/lib/tinyusb/hw/bsp/rp2040/family.cmake:269-315` defines a
+`tinyusb_pico_pio_usb` INTERFACE target that compiles `pio_usb.c`,
+`pio_usb_host.c`, `pio_usb_device.c` and `usb_crc.c`, generates the `usb_tx.pio`
+and `usb_rx.pio` headers, adds `hcd_pio_usb.c` to `tinyusb_host_base`, defines
+`PIO_USB_USE_TINYUSB`, and links `hardware_dma`, `hardware_pio` and
+`pico_multicore`. It takes the library path from `PICO_PIO_USB_PATH`, defaulting
+to a TinyUSB-internal directory that does not exist in the SDK checkout, because
+TinyUSB 0.18.0 declares no submodules and fetches its dependencies with
+`tools/get_deps.py` instead.
+
+So the library needs pinning and pointing at, not vendoring. `PICO_PIO_USB_PATH`
+has to be set **before `pico_sdk_init()`**, because that is when the SDK
+processes its tinyusb directory and `check_and_add_pico_pio_usb_support()` runs.
+
+One more thing worth knowing about the RP2350: `hcd_pio_usb.c:29` guards on
+`CFG_TUSB_MCU == OPT_MCU_RP2040`, which looks like it would exclude this chip. It
+does not. The SDK builds TinyUSB with `FAMILY rp2040`, and `family.cmake:68`
+defines `CFG_TUSB_MCU=OPT_MCU_RP2040` for the whole family, RP2350 included.
+
+### 2026-08-25: with PIO-USB enabled, the native USB controller is left entirely free
+
+`hcd_rp2040.c:30` guards on `!CFG_TUH_RPI_PIO_USB`, so setting that macro
+compiles the native host controller out of the build completely. The PIO port
+becomes the only host, and `hcd_pio_usb.c:43` sets `RHPORT_OFFSET 1`, so TinyUSB
+root port 1 is PIO port 0 and `tuh_init(1)` is the only valid call. The pin,
+PIO block and DMA channel reach the driver through
+`tuh_configure(1, TUH_CFGID_RPI_PIO_USB_CONFIGURATION, &pio_cfg)`, which must
+happen before `tuh_init()` because `hcd_init()` is what calls
+`pio_usb_host_init()`.
+
+Confirmed on the linked `fj USB_HID=1` image: 32 `pio_usb*` symbols present,
+zero native `hw_endpoint_*` or `rp2040_usb_init` symbols.
+
+The consequence is that nothing structural stops a TinyUSB CDC device on the
+native USB-C port alongside the PIO host: there is no duplicate `hcd_`
+definition to trip over. It needs `CFG_TUD_ENABLED` and `CFG_TUH_ENABLED`
+together and both task loops serviced, which is what Adafruit's CircuitPython
+does on this board. Not attempted. The UART1 console is the answer instead, and
+this is the route back to a USB console if the UART proves inconvenient.
+
+### 2026-08-25: the two-way PIO funcsel is now a three-way test
+
+`drivers/audio.c:99` and `src/frank/frank_audio.c:66-68` both mapped any
+non-`pio0` block to `GPIO_FUNC_PIO1`. `docs/FRUIT-JAM.md` called this latent;
+moving I2S to PIO2 makes it live, so both are fixed. The `drivers/audio.c` fix
+costs 8 bytes of flash on the other three boards and is behaviourally identical
+there, since `pio1` still resolves to `GPIO_FUNC_PIO1`.
 
 ### 2026-08-22: PIO-USB does not require a 120 or 240 MHz system clock
 
@@ -301,6 +625,95 @@ bit clocks per frame, so BCLK is 32 times the sample rate everywhere.
 
 ---
 
+### 2026-08-25: correction, pin Pico-PIO-USB to upstream main, not to the commit TinyUSB names
+
+The entry above says to pin `fe9133f`, tag 0.6.1, because that is the commit
+TinyUSB 0.18.0 lists in `tools/get_deps.py`. That was the right instinct for API
+compatibility and the wrong one for silicon support, and it cost a hardware
+session.
+
+**0.6.1 predates RP2350 support entirely.** It is 58 commits behind upstream
+main, and those commits include:
+
+| Commit | What it adds |
+|---|---|
+| `08a9b06` | workaround for RP2350-E9, which stops PIO-USB host detecting a device at all |
+| `a810cb4` | keeps that workaround's code in SRAM |
+| `b559b3e` | RP2350 PIO2 support, via `pio_get_instance` and `PIO_IRQ_NUM` |
+| `a7d2b61` | pins above 32 on the RP2350B |
+| `2f17cec`, `3f80202` | correct `PICO_RP2350` testing, which is always defined and may be 0 |
+
+The E9 one is the one that matters here. The workaround sits in
+`pio_usb_bus_get_line_state()` at `src/pio_usb_ll.h:144-160`, and that function
+is what `hcd_port_connect_status()` calls. On affected silicon the pad leaks
+current while input-enable is held on, so the line-state read is wrong and the
+host never sees a device on the port. The fix clears `IE` on both D+ and D-,
+waits eight nops for the leak to drain, sets `IE` again, then reads.
+
+It is guarded on `chip_version <= 2`, and the Fruit Jam is A2, so it applies to
+this board. Note also its comment that the drain delay was "tested with
+264Mhz"; frank-micro runs 252 MHz, so it is inside what upstream has tried.
+
+**Observed on hardware, 2026-08-25.** At `fe9133f` the board booted, displayed
+the Master 128 MOS screen correctly and mounted the SD card, and a USB keyboard
+in an onboard socket did nothing. Video, SD, PSRAM and the core 1 encoder were
+all unaffected, which is what pointed at device detection rather than at the PIO
+or DMA allocation.
+
+The submodule is therefore pinned at `5a37a66`. It compiles clean against SDK
+2.2.0's TinyUSB 0.18.0 `hcd_pio_usb.c`, so the API worry that motivated pinning
+0.6.1 does not arise in practice. **Do not move it back.** If it ever has to
+move again, the constraint to check is whether `hcd_pio_usb.c` still builds, not
+what `get_deps.py` names.
+
+One consequence worth knowing: at `5a37a66` the PIO index goes through
+`pio_get_instance()`, so PIO2 **is** addressable and the one-bit-test constraint
+recorded above no longer holds. The allocation is unchanged regardless, because
+PIO1 is free on this board and the transmit program still needs instruction
+offset 0.
+
+### 2026-08-25: first hardware results, and option C holds
+
+Board: Adafruit Fruit Jam. Build: `PLATFORM=fj`, `HDMI_DRIVER=HDMI_PIO_AUDIO`,
+252 MHz, flashed as a UF2 over BOOTSEL. SD card: FAT32 with the `micro` tree
+from `sdcard/micro.zip`, no disc images.
+
+**Works, observed directly:**
+
+- Cold boot to the BBC Master 128 MOS screen on a DVI monitor. Display looked
+  correct.
+- SD card mounted. `SD card mount: OK`.
+- PSRAM detected, 7680 kB dlmalloc heap.
+- Core 1 HDMI encoder started.
+- b-em reached `Using Pico Thumb CPU`.
+- USB keyboard in an onboard USB-A socket, behind the CH334F hub, **enumerates
+  and types**, at 252 MHz, with the PIO DVI driver running.
+
+**This settles the question that decided the size of the port.** `docs/FRUIT-JAM.md`
+section 6 made phase 3, an HSTX video driver plus a clock-tree rework, contingent
+on PIO-USB not working at 252 MHz alongside PIO video. It works. Option C holds,
+so **phase 3 is not needed**, the PIO DVI driver stays, and HDMI-embedded audio
+is kept.
+
+What is proven is enumeration, not stability. The soak is still outstanding, and
+the failure mode of a marginal clock is intermittent dropped packets rather than
+a clean refusal, so hours of running with the keyboard attached is still the test
+that matters.
+
+**Not yet tested on hardware:** MODE 7 versus a bitmap mode, mounting a disc and
+SHIFT-BREAK autoboot, HDMI audio, screenshots, `micro.ini` persistence, the F11
+and F12 overlays, and the no-SD-card path.
+
+One boot-log observation, pre-existing and not Fruit-Jam-specific:
+`src/bem/model.c:46-55` declares `rom_setups[NUM_ROM_SETUP]` with
+`NUM_ROM_SETUP` fixed at 5 while `#ifndef PICO_BUILD` removes two of the five
+initialisers. So the BBC B model's `swram` lookup fails, the warning then claims
+a fallback to `swram` when `rom_setups[0]` is actually `std`, and the search
+loop calls `strcmp(NULL, name)` on the two zero-filled entries. It survives only
+because there is no MMU and address 0 is readable on this part. Harmless in
+practice, identical on all four boards, and out of scope while the rule about
+keeping `src/bem/` divergence small stands.
+
 ## Dead ends, so nobody retries them
 
 ### `drivers/HDMI_vga_hstx.c` is not a starting point for an HSTX driver
@@ -379,8 +792,19 @@ than a detail.
 
 | Question | Blocks | Cheapest way to settle it |
 |---|---|---|
-| Does PIO-USB enumerate reliably at 252 MHz, over hours, with a keyboard behind the hub? | Whether the port needs an HSTX driver at all. It is now phase 1b, not phase 3, because there is no other input path | Build phase 1a first so only one thing is unproven, then soak phase 1b for hours |
+| **Answered 2026-08-25: yes.** Does the `fj` build boot to the MOS screen on a DVI monitor? | — | Done. See the first-hardware-results entry |
+| **Answered 2026-08-25: yes, it enumerates.** Does PIO-USB work at 252 MHz with a keyboard behind the hub? | Settled the size of the port: phase 3 is not needed | Done, once the library was moved off 0.6.1 |
+| Does that keyboard stay up over hours? | Nothing structural, but a marginal clock shows as intermittent dropped packets | Leave it running with the keyboard attached and type into it periodically |
+| Do MODE 7 and a bitmap mode both render correctly? | Nothing. They take different blit paths in `frank_gui.c` | `MODE 7` then `MODE 1` from BASIC |
+| Does a disc mount and SHIFT-BREAK autoboot? | Nothing | Put an `.ssd` in `/micro/disk/` and use F11 |
+| **Answered 2026-08-25: yes.** Does the codec PLL lock at the computed constants? | — | Done; sound from the headphone jack |
+| Does the onboard speaker work? | Nothing. Same driver, different output | Attach a speaker to the JST connector |
+| Is the analogue stage clipping at 100 percent volume? | Nothing now: I2S was reported sounding good once the automute was removed. Left here only as the first thing to check if distortion is ever reported | Listen at 85 percent and compare |
 | Which physical button is GPIO 4 and which is GPIO 5? | Nothing. Cosmetic | The board layout or a multimeter. The schematic's net and part names are crossed |
+
+Settled since the last revision of this table, both by reading source rather
+than by testing: how many PIO blocks and state machines PIO-USB needs, and which
+blocks it can address. See the 2026-08-25 findings.
 
 Resolved since the first version of this table: whether the USB-C port can be a
 host (no), and whether the HSTX pins are directly driven (yes). Both from the
@@ -395,8 +819,9 @@ repository and none should be until a phase needs it.
 |---|---|---|
 | `adafruit/pico-mac` | `59c910b` | HSTX driver structure, the 528 MHz clock plan and PLL search, TLV320DAC3100 bring-up |
 | `adafruit/fruitjam-doom` | `f2ded0b` | RGB332 and 4bpp lane values, DMA pixel doubling, command-list vertical scaling, a second copy of the codec sequence |
-| `tannewt/Pico-PIO-USB` | `f3f9d11` | The divider computation, the absence of any clock check, the `pio0`-or-`pio1` restriction |
-| Pico SDK | tag `2.3.0`, commit `98a542c1`, at `/home/adq/dev/pico-sdk` | Fruit Jam pin numbers, HSTX register semantics, clock aux sources, PLL VCO range |
+| `tannewt/Pico-PIO-USB` | `f3f9d11` | The divider computation, the absence of any clock check, the `pio0`-or-`pio1` restriction. **Not usable in the build**, see the 2026-08-25 finding: no TinyUSB integration and the wrong file layout |
+| `sekigon-gonnoc/Pico-PIO-USB` | `5a37a66`, vendored as the submodule `lib/Pico-PIO-USB` | The PIO block and state-machine count, the DMA and alarm claims, the instruction-offset-0 constraint, and the RP2350-E9 line-state workaround. Pinned here rather than at the 0.6.1 that TinyUSB names, because 0.6.1 predates RP2350 support; see the 2026-08-25 correction |
+| Pico SDK | tag `2.2.0`, commit `a1438df`, at `/home/adq/dev/pico-sdk` | Fruit Jam pin numbers, HSTX register semantics, clock aux sources, PLL VCO range, and the TinyUSB PIO-USB build glue in `lib/tinyusb/hw/bsp/rp2040/family.cmake`. Earlier revisions of this table said tag 2.3.0, commit `98a542c1`; that was wrong |
 | RP2350 datasheet | document RP-008373-DS, fetched 2026-08-22 | Narrow IO register writes at section 2.1.5, DMA byte-lane replication at section 12.6 |
 | TLV320DAC3100 datasheet | document SLAS671C, fetched 2026-08-22 | Every constraint in `tools/tlv320_clocks.py`, cited there by clause |
 | `adafruit/pico-extras` | default branch, fetched 2026-08-22 | `audio_i2s.c` and `audio_i2s.pio`, to establish that BCLK is 32 times the sample rate in the Adafruit projects too |

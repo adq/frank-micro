@@ -19,6 +19,10 @@ the Raspberry Pi Pico 2 (RP2350). It outputs HDMI video with audio embedded in
 the HDMI stream, reads disc images from a FAT32 SD card, and takes input from a
 PS/2 keyboard, NES or SNES gamepads, or USB HID devices.
 
+Four boards are supported: `m1` Murmulator 1.x, `m2` Murmulator 2.0, `z0`
+Waveshare RP2350-PiZero, and `fj` Adafruit Fruit Jam. The Fruit Jam differs from
+the other three in enough ways to get its own section; see section 12.
+
 The emulation engine is **B-em** by Tom Walker, vendored in `src/bem/`. The parts
 that make it fit on a microcontroller come from Graham Sanderson's Pico fork of
 B-em: the Thumb-assembly 6502 core, the raw-row rasteriser, the sector-streaming
@@ -228,8 +232,12 @@ PLATFORM=z0 ./build.sh                        # Waveshare RP2350-PiZero
 HDMI_DRIVER=HDMI_PIO ./build.sh               # PIO HDMI or VGA, I2S/PWM audio
 HDMI_DRIVER=COMPOSITE ./build.sh              # composite PAL/NTSC TV
 USB_HID=1 ./build.sh                          # USB HID input
+PLATFORM=fj USB_HID=1 ./build.sh              # Adafruit Fruit Jam (needs USB_HID=1)
 ./release.sh 1.00                             # all eight variants into release/
 ```
+
+Note `release.sh` still builds only the eight pre-Fruit-Jam variants. `fj` is
+deliberately not in `BUILD_MATRIX` until it has been proven on hardware.
 
 Output is `build/frank-micro.uf2`.
 
@@ -246,7 +254,7 @@ variant tells you nothing. It also writes `version.txt` before building
 
 | Variable | Default | Effect |
 |---|---|---|
-| `PLATFORM` | `m2` | `m1`, `m2`, `z0` |
+| `PLATFORM` | `m2` | `m1`, `m2`, `z0`, `fj` |
 | `HDMI_DRIVER` | `HDMI_PIO_AUDIO` | see below |
 | `CPU_SPEED` | `252` | core clock in MHz |
 | `USB_HID` | `0` | `1` enables the USB HID host and disables USB CDC stdio |
@@ -465,8 +473,12 @@ keeps stale state across switches.
 
 ### PIO, DMA and interrupt budget
 
-**PIO1 is exactly full at four state machines in every configuration**, and one
-is wasted. Check this table before adding any PIO consumer.
+The budget differs between M1/M2/Z0 and the Fruit Jam, because the Fruit Jam has
+no PS/2 socket and no NES pad connector but does have a PIO USB host. Check the
+right table before adding any PIO consumer.
+
+**On M1, M2 and Z0, PIO1 is exactly full at four state machines in every
+configuration**, and one is wasted.
 
 | Block | Claimant | State machines |
 |---|---|---|
@@ -476,10 +488,24 @@ is wasted. Check this table before adding any PIO consumer.
 | PIO1 | NES pad | 1 |
 | PIO1 | I2S | 1 |
 
-On M1 and Z0 there is no PS/2 mouse, so `src/board_config.h:72-75` aliases
+On M1 and Z0 there is no PS/2 mouse, so `src/board_config.h` aliases
 `PS2_MOUSE_CLK` to `PS2_PIN_CLK` and the mouse state machine is initialised on
 the same pin as the keyboard. Reclaiming it is the cheapest way to free PIO1
 capacity. Instruction memory is also near the limit at about 27 of 32 words.
+
+**On the Fruit Jam, PIO1 belongs entirely to the USB host and PIO2 is spoken
+for.**
+
+| Block | Claimant | State machines |
+|---|---|---|
+| PIO0 | video, three TMDS serialisers | 3 |
+| PIO1 | PIO-USB host, and its transmit program must be at instruction offset 0 | 3 |
+| PIO2 | I2S, once the codec driver exists | 1 |
+
+Nothing is spare there either, and PIO1 in particular cannot be shared: the
+library places its transmit program at offset 0, so the block has to be one that
+nothing else has programmed. PIO1 rather than PIO2 for USB is forced, not chosen;
+see section 12.
 
 DMA: the video drivers claim dynamically; **I2S hardcodes channels 10 and 11**
 (`drivers/audio.c:47-48`) and **PWM hardcodes 8 and 9**
@@ -552,7 +578,8 @@ only for FatFs long-filename work buffers via
 | Screenshot capture and BMP writing | `src/frank/frank_screenshot.c` |
 | Overlay text and box drawing | `src/Pico/ui_draw.c`, `ui_font.c` |
 | Which model boots, and its ROMs | `src/bem/pico/stub_allegro5/al_stub.cpp:286-311` |
-| Pin assignment for a board | `src/board_m1.h`, `board_m2.h`, `board_z0.h` |
+| Pin assignment for a board | `src/board_m1.h`, `board_m2.h`, `board_z0.h`, `board_fj.h` |
+| Whether a board has PS/2, a NES pad, PWM audio | the `HAS_*` macros in its `src/board_*.h`, see section 12 |
 | HDMI, VGA or composite output | `drivers/HDMI*.c`, `drivers/tv/` |
 | I2S or PWM output | `drivers/audio.c`, `drivers/pwm_audio/` |
 | Emulated hardware timing | register a `hw_event`, see section 6 |
@@ -596,23 +623,47 @@ ignoring them is high.
 
 There is no CI and there are no tests. Every check is manual and on hardware.
 
-**Only Fruit Jam hardware is available to this project, and only from the point
-one arrives.** The `m1`, `m2` and `z0` platforms cannot be tested at all, so
-treat them as frozen: prefer additive, platform-gated changes to shared code, and
-where shared code must change in place, write down why the existing boards are
-unaffected. See `docs/HANDOFF.md`.
+**Assume you cannot test every board.** Four platforms are supported and few
+people will have all four in front of them, so treat the ones you cannot run as
+frozen:
 
-The cheapest useful check needs no board: configure and compile all eight release
-variants. That alone catches broken source lists, missing dependencies and
-dead-file mistakes. **All eight pass as of this writing**, so a failure means you
-broke something.
+- Prefer additive, platform-gated changes to shared code over changes in place.
+- Where shared code must change in place, write down why the other boards are
+  unaffected, next to the change. "The preprocessor output is identical for
+  m1, m2 and z0" is the kind of argument that counts; "it should be fine" is not.
+- Say which boards you actually tested on. Do not describe a change as verified
+  on a board you did not run it on.
+
+The cheapest useful check needs no board: configure and compile every variant.
+That alone catches broken source lists, missing dependencies and dead-file
+mistakes. **All twenty pass as of 2026-08-25**, so a failure means you broke
+something. For reference, the `fj` figures at that point were 387,464 bytes of
+flash and 352,772 of RAM with `USB_HID=1`, against 368,044 and 337,272 for the
+default `m2` build; flash is on a 16 MB part here rather than 4 MB.
+
+Sweep `USB_HID` too: it changes which input drivers and which stdio backend are
+compiled in, so it is a second dimension and not a detail.
 
 ```bash
-for p in m2 m1 z0; do for d in HDMI_PIO_AUDIO HDMI_PIO COMPOSITE; do
+for p in m2 m1 z0 fj; do for d in HDMI_PIO_AUDIO HDMI_PIO COMPOSITE; do
   [ "$p" = z0 ] && [ "$d" = COMPOSITE ] && continue
-  PLATFORM=$p HDMI_DRIVER=$d ./build.sh || echo "FAILED: $p $d"
+  [ "$p" = fj ] && [ "$d" = COMPOSITE ] && continue
+  for u in 0 1; do
+    PLATFORM=$p HDMI_DRIVER=$d USB_HID=$u ./build.sh \
+      || echo "FAILED: $p $d hid=$u"
+  done
 done; done
 ```
+
+Then check the thing that fails silently, per section 5:
+
+```bash
+arm-none-eabi-nm build/frank-micro.elf | grep -E 'stdio_(usb|uart)'
+```
+
+An empty result means the firmware has no console. That is expected for `m1`,
+`m2` and `z0` with `USB_HID=1`, and is a bug for `fj`, whose console is on
+UART1.
 
 On hardware, exercise the paths that cross driver boundaries:
 
@@ -678,7 +729,123 @@ Full detail and citations in `docs/INVESTIGATION.md`. Ranked.
 | Drivers | `HDMI_vga.c:432-436` re-bases PIO GPIO to 32, which `HDMI.c:534-538`'s own comment calls invalid on RP2350; unreachable today only because the Z0 forces `SELECT_VGA = false` |
 | Drivers | The I2S pin-mux maps any non-pio0 block to `GPIO_FUNC_PIO1` (`drivers/audio.c:99`, `frank_audio.c:66-68`); wrong for PIO2, latent until anything uses it |
 | Concurrency | PS/2 ring buffers are drained from both an interrupt and a poll path with no masking |
-| Resources | PIO1 is exactly full, with one state machine wasted on a nonexistent mouse |
+| Resources | PIO1 is exactly full on M1, M2 and Z0, with one state machine wasted on a nonexistent mouse. On the Fruit Jam all three PIO blocks are spoken for |
 | Tooling | `tools/micro_console.py` is another project's script and speaks a dead protocol |
 | Build | Application and emulation core build at `-O2` while drivers build at `-O3`; undocumented and possibly unintended |
 | Process | No CI, no tests |
+
+
+## 12. The Fruit Jam, and what makes it different
+
+`PLATFORM=fj`, Adafruit product 6200, RP2350B, 16 MB flash, 8 MB PSRAM. It
+differs from the other three boards in enough ways to be worth its own section.
+
+Confirmed working on hardware as of 2026-08-25: cold boot to the Master 128 MOS
+screen over DVI, disc images from SD, HDMI-embedded audio, a USB keyboard behind
+the onboard hub, and sound from the headphone jack through the codec. Not yet
+exercised: MODE 7 versus a bitmap mode, mounting a disc and SHIFT-BREAK autoboot,
+screenshots, `micro.ini` persistence, the onboard speaker, the no-SD-card path,
+and stability over hours.
+
+The full plan is `docs/FRUIT-JAM.md`; what was decided and found while building
+it is in `docs/HANDOFF.md`.
+
+Pins are in `src/board_fj.h` and come from the Pico SDK's own
+`boards/adafruit_fruit_jam.h`, cross-checked against Adafruit's published
+schematic. The DVI pins are GPIO 12 to 19 in exactly the order `board_m2.h`
+already declares, polarity included, so the video drivers needed no change.
+
+### Build it with `USB_HID=1`
+
+There is no PS/2 socket and no NES pad connector, so a USB keyboard is the only
+input the board has. A `USB_HID=0` build boots and displays but has no keyboard
+at all, which is useful for bring-up and useless otherwise.
+
+The two USB-A sockets sit behind a CH334F hub whose upstream pair is on GPIO 1
+and 2. Those are ordinary PIO pins, not the RP2350's native USB controller, and
+**the USB-C connector cannot be made a host**: both its CC pins carry 5.1K to
+ground, which is sink termination, and nothing on the board can source 5 V onto
+that connector under firmware control. So PIO-USB is not one option among
+several, it is the only input path.
+
+Two consequences in the code:
+
+- The hub and both sockets are on a switched 5 V rail. `frank_platform.c` drives
+  `USB_HOST_5V_EN_PIN` high and waits before the host stack initialises. Without
+  that the sockets are dead and nothing enumerates.
+- `Pico-PIO-USB` is a submodule at `lib/Pico-PIO-USB`, pinned at `5a37a66`.
+  **It must be a version with RP2350 support**, which the 0.6.1 that TinyUSB
+  0.18.0 names in `tools/get_deps.py` does not have. Without the RP2350-E9
+  workaround in `pio_usb_bus_get_line_state()` the host never detects a device
+  on the port, which looks exactly like a dead keyboard on a board that is
+  otherwise working. See `docs/HANDOFF.md`. All the build glue comes from the
+  SDK's own TinyUSB, so `CMakeLists.txt` only has to set `PICO_PIO_USB_PATH`,
+  and it has to do so before `pico_sdk_init()`.
+
+### The console is on UART1, GPIO 8 and 9
+
+This is the one platform where a `USB_HID=1` build still has a console.
+`CMakeLists.txt` turns USB CDC off whenever USB HID is on, which is right for
+the other three boards because there USB HID owns the native controller. Here it
+does not: the host is on PIO, and `hcd_rp2040.c` is compiled out entirely. So
+UART stdio is enabled for `fj` and you attach a USB-serial adapter to the 2x16
+header.
+
+A CDC device on the native port alongside the PIO host is possible and is not
+blocked by anything structural, but it needs a TinyUSB device stack and a host
+stack in one binary. Not attempted. See `docs/HANDOFF.md`.
+
+### Capability macros, which finally do something
+
+`HAS_PS2` and `HAS_NESPAD` are defined in `board_m1.h`, `board_m2.h` and
+`board_z0.h` and absent from `board_fj.h`, which declares no PS/2 or pad pin
+numbers at all. Five sites are guarded on them, in `board_config.h`,
+`drivers/ps2/ps2kbd_wrapper.c`, `frank_platform.c` and `frank_keyboard.c`.
+
+**Add a board by omitting a capability, not by inventing pin numbers for
+hardware that is not there.** Before this, the `HAS_*` macros were declared in
+three headers and read nowhere.
+
+### What the board does not have
+
+- **No composite TV.** No video DAC on the DVI pins, so
+  `HDMI_DRIVER=COMPOSITE` is rejected at configure time. That also removes the
+  variant `CLAUDE.md` section 6 tells you to budget RAM against, so on this
+  board the tight variant is `HDMI_PIO_AUDIO`.
+- **No VGA ribbon**, so no runtime HDMI-versus-VGA detection. Nothing had to
+  change for this: `frank_platform.c` already forces `SELECT_VGA = false` in
+  every `HDMI_PIO_AUDIO` build.
+- **No PWM audio output.** The headphone jack and the onboard speaker are both
+  behind a TLV320DAC3100 codec. `PWM_PIN0` and `PWM_PIN1` are still defined,
+  because `pwm_audio.c` needs them to compile, but they point at free header
+  pins and the backend is left out of the F12 menu by `frank_settings.c`.
+- **Two working audio backends, and neither is PWM.** "HDMI" rides in the DVI
+  stream and comes out of the monitor; "I2S" goes through the TLV320DAC3100 to
+  the headphone jack and the onboard speaker. Both are confirmed on hardware.
+  HDMI is the default and needs nothing on the board.
+
+  The codec is `drivers/tlv320dac3100.c`. Two things about it are worth knowing
+  before touching it. Its clock constants come from `tools/tlv320_clocks.py` and
+  must not be copied from another project, because the register block both
+  Adafruit ports use is out of spec at every rate frank-micro produces. And the
+  F12 volume drives its **analogue** output stage rather than dividing the
+  samples, so the digital path keeps all sixteen bits; see section 8 constraint 6
+  for why nothing in that driver may be called from the audio producer path.
+- **No hot-plug detect.** The connector's `HOTPLUG` pin reaches no GPIO, so
+  firmware cannot tell whether a monitor is attached.
+
+### Two hazards worth knowing before touching the board
+
+- `PERIPH_RST` on GPIO 22 has a 10K pull-up, so the codec and the ESP32-C6 both
+  leave reset with no firmware action. **The hazard is asserting that line, not
+  forgetting to release it**, and asserting it resets both parts.
+- GPIO 23 is a three-way net: the codec's `GPIO1`, the ESP32-C6's `IO9/BOOT9`,
+  and the `ESP_BOOT` header. The codec bring-up sequence in both Adafruit
+  projects configures the codec's `GPIO1` as an output, which on this board can
+  drive the ESP32's boot strap into download mode. Decide about that register
+  write rather than copying it.
+
+Bricking is not a risk: `BTN0` is wired as a standard BOOTSEL, so holding it
+while plugging in USB always recovers the board. To flash, do that, then copy
+`build/frank-micro.uf2` to the `RPI-RP2` drive. `picotool` and `openocd` are not
+installed on this machine, so `./flash.sh` will not run as it stands.

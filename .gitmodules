@@ -2,3 +2,6 @@
 	path = frank-hdmi-sound
 	url = https://github.com/rh1tech/frank-hdmi-audio.git
 	branch = frank-micro
+[submodule "lib/Pico-PIO-USB"]
+	path = lib/Pico-PIO-USB
+	url = https://github.com/sekigon-gonnoc/Pico-PIO-USB.git

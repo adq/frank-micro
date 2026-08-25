@@ -8,14 +8,25 @@
 #
 #
 # Usage: PLATFORM=m1 USB_HID=1 ./build.sh [CPU_MHZ] [HDMI_DRIVER]
-#   PLATFORM:    m1, m2 (default), z0
+#   PLATFORM:    m1, m2 (default), z0, fj
+#                fj is the Adafruit Fruit Jam: DVI only, no composite TV, no
+#                PS/2 socket and no NES pad connector, so its only input path
+#                is a USB keyboard (USB_HID=1).
 #   HDMI_DRIVER: HDMI_PIO_AUDIO (default, HDMI-embedded audio)
 #                HDMI_PIO       (PIO HDMI/VGA + I2S/PWM audio)
 #                COMPOSITE      (software PAL/NTSC TV + I2S/PWM audio; forces 378 MHz)
 #   USB_HID:     0 (default) PS/2 only + USB serial console
 #                1 USB HID keyboard/gamepad + PS/2 (no USB serial console)
 #
+# Run ./tools/setup.sh once first: it initialises the submodules and writes
+# tools/env.sh, which this script sources below to get PICO_SDK_PATH.
+#
 set -e
+
+# PICO_SDK_PATH, if tools/setup.sh has found the SDK and the shell has not.
+if [ -z "${PICO_SDK_PATH:-}" ] && [ -f "$(dirname "$0")/tools/env.sh" ]; then
+    . "$(dirname "$0")/tools/env.sh"
+fi
 
 rm -rf ./build
 mkdir build
