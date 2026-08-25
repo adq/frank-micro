@@ -9,17 +9,11 @@
 #
 # Usage: PLATFORM=m1 USB_HID=1 ./build.sh [CPU_MHZ] [HDMI_DRIVER]
 #   PLATFORM:    m1, m2 (default), z0, fj
-#                fj is the Adafruit Fruit Jam: DVI only, no composite TV, no
-#                PS/2 socket and no NES pad connector, so its only input path
-#                is a USB keyboard (USB_HID=1).
 #   HDMI_DRIVER: HDMI_PIO_AUDIO (default, HDMI-embedded audio)
 #                HDMI_PIO       (PIO HDMI/VGA + I2S/PWM audio)
 #                COMPOSITE      (software PAL/NTSC TV + I2S/PWM audio; forces 378 MHz)
 #   USB_HID:     0 (default) PS/2 only + USB serial console
 #                1 USB HID keyboard/gamepad + PS/2 (no USB serial console)
-#
-# Run ./tools/setup.sh once first: it installs the host packages, initialises the
-# submodules and clones the Pico SDK.  Export PICO_SDK_PATH before building.
 #
 set -e
 
