@@ -56,6 +56,18 @@ void frank_ui_render(uint8_t *fb, int stride, int height);
  * Used to confirm actions such as saving a screenshot. */
 void frank_ui_toast(const char *msg);
 
+#ifdef HDMI_HSTX
+/* Horizontal span of framebuffer row `y` that the overlay currently owns, in
+ * framebuffer coordinates, or false if the overlay does not cover that row.
+ *
+ * Only the single-buffered HSTX path needs this. There the emulator writes
+ * every row ahead of the scanout beam, so anything composited on top after
+ * the rows are written is erased before it is ever displayed. The blit skips
+ * this span rather than repainting it, and frank_ui_render() keeps it
+ * painted. */
+bool frank_ui_row_span(int y, int stride, int *x0, int *x1);
+#endif
+
 #ifdef __cplusplus
 }
 #endif

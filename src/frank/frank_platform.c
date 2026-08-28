@@ -50,8 +50,8 @@
 #define FRANK_MICRO_VERSION "dev"
 #endif
 
-#define FB_W 320
-#define FB_H 256
+#define FB_W MICRO_FB_WIDTH
+#define FB_H MICRO_FB_HEIGHT
 
 /* Crash diagnostics mirror (populated by crash_handler_check_and_print;
  * readable via the debug probe even when USB-CDC serial misses the print). */
@@ -124,6 +124,37 @@ void frank_perf_tick(void) {
      *
      * When "Limit Speed" is Off the pacer is skipped so the emulator runs as
      * fast as the RP2350 allows (useful for fast loaders). */
+#ifdef HDMI_HSTX
+    /* ── Tear control under HSTX ─────────────────────────────────────────
+     *
+     * The framebuffer is single-buffered there, so the emulator writes rows
+     * into the same memory the video DMA is reading.  Both run at 50 Hz and
+     * both go top to bottom, so they only have to be held in phase, with the
+     * emulator far enough ahead that it has finished a row before the beam
+     * reaches it.
+     *
+     * The beam is the faster of the two.  It reaches the first picture row
+     * about 2.4 ms after vsync and the last about 18.8 ms after it, while
+     * the emulator spreads its 256 rows across the full 20 ms.  So the
+     * emulator has to start slightly *before* vsync, which is what the lead
+     * below expresses: it targets a point one frame on from the last vsync,
+     * minus the lead.
+     *
+     * HSTX_FRAME_LEAD_US is the number worth adjusting if a tear line shows
+     * up on hardware. Larger moves the emulator earlier.
+     */
+#define HSTX_FRAME_LEAD_US 1500u
+    if (g_frank_limit_speed) {
+        uint32_t target = hdmi_hstx_vsync_us() + FRAME_PERIOD_US - HSTX_FRAME_LEAD_US;
+        int32_t wait = (int32_t)(target - time_us_32());
+        /* Never stall more than one frame: if the phase is far out, take the
+         * hit on this frame and let the next vsync bring it back. */
+        if (wait > (int32_t)FRAME_PERIOD_US) wait = (int32_t)FRAME_PERIOD_US;
+        if (wait > 0) busy_wait_us_32((uint32_t)wait);
+    }
+    next_frame = 0;
+    uint64_t now = time_us_64();
+#else
     uint64_t now = time_us_64();
     if (!g_frank_limit_speed) {
         next_frame = 0;   /* re-prime when throttling resumes */
@@ -138,6 +169,7 @@ void frank_perf_tick(void) {
         if ((int64_t)(now - next_frame) > (int64_t)FRAME_PERIOD_US)
             next_frame = now + FRAME_PERIOD_US;
     }
+#endif /* HDMI_HSTX */
 
     /* ── speed measurement ───────────────────────────────────────────────── */
     frames++;
@@ -259,13 +291,16 @@ static void boot_error_screen(FRESULT sd_result) {
                   + (int)plasma_sin[(uint8_t)(py * 2)]
                   + (int)plasma_sin[(uint8_t)(px + py)]
                   + (int)plasma_sin[(uint8_t)(px - py)];
-            SCREEN[0][py * FB_W + px] = (uint8_t)(16 + (uint8_t)((v + 508) >> 4));
+            SCREEN[0][py * FB_W + px] =
+                FRAMEBUFFER_PIXEL(16 + (uint8_t)((v + 508) >> 4));
         }
     }
     graphics_set_buffer(SCREEN[0]);
 
-    /* Draw error text on top — uses UI_COLOR_* indices 240-247. */
-    const int x = 18;
+    /* Draw error text on top — uses UI_COLOR_* indices 240-247.
+     * Offset into the picture area so the text does not start inside the
+     * pillarbox border on a framebuffer wider than the BBC screen. */
+    const int x = MICRO_FB_X_OFFSET + 18;
     int y = 24;
     boot_draw_line(SCREEN[0], x, y, "frank-micro failed to start", UI_COLOR_FG);
     y += 18;
@@ -295,6 +330,14 @@ static void boot_error_screen(FRESULT sd_result) {
         boot_draw_line(SCREEN[0], x, y, info, UI_COLOR_DIM);
     }
 
+#ifdef HDMI_HSTX
+    /* Static under HSTX.  The animation below works by rotating the palette
+     * under pixels that are already on screen, and that driver scans out
+     * colours rather than indices, so a palette write changes nothing that
+     * has been drawn.  Redrawing 180 KB of plasma every frame to animate the
+     * screen that says the SD card is missing is not worth it. */
+    while (true) tight_loop_contents();
+#else
     /* Animate: cycle palette phase each frame — zero extra RAM, ~30 fps. */
     uint8_t phase = 0;
     while (true) {
@@ -303,6 +346,7 @@ static void boot_error_screen(FRESULT sd_result) {
         phase++;
         sleep_ms(33);
     }
+#endif
 }
 
 static void boot_halt_if_required(FRESULT sd_result) {
@@ -320,6 +364,13 @@ int main(void) {
 #endif
     if (!set_sys_clock_khz(CPU_CLOCK_MHZ * 1000, false))
         set_sys_clock_khz(252 * 1000, true);
+
+#ifdef HDMI_HSTX
+    /* Before stdio and before the SD card: this sets clk_hstx, and on the way
+     * there it moves clk_peri off pll_usb, so the UART and SPI0 divisors have
+     * to be worked out after it rather than before. */
+    hdmi_hstx_clock_init();
+#endif
 
     stdio_init_all();
 #ifndef USB_HID_ENABLED
@@ -404,7 +455,12 @@ int main(void) {
      *  HDMI_PIO:       auto-detect HDMI vs VGA from the ribbon via testPins(),
      *                  exactly like frank-cpc; audio is on the local I2S/PWM DAC.
      */
-#if defined(HDMI_PIO_AUDIO)
+#if defined(HDMI_HSTX)
+    /* HSTX: no VGA path exists and there is nothing to detect.  graphics_init()
+     * owns the whole bring-up, including clk_hstx and core 1, the way the
+     * composite driver does. */
+    SELECT_VGA = false;
+#elif defined(HDMI_PIO_AUDIO)
     SELECT_VGA = false;
 #elif defined(VIDEO_COMPOSITE)
     /* Composite TV owns the video path on Core 1 (graphics_init launches it).

@@ -101,9 +101,48 @@ struct video_mode_t graphics_get_video_mode(int mode);
 void graphics_set_bgcolor(uint32_t color888);
 
 #ifdef HDMI_HSTX
-/* Push mono int16 audio samples into the HSTX data-island queue. */
-void hdmi_hstx_push_samples(const int16_t *buf, int count);
-void hdmi_hstx_fill_silence(int count);
+/* Push interleaved stereo frames into the HSTX data-island queue.  `frames`
+ * counts stereo pairs, so `buf` holds 2*frames int16 samples.  Returns the
+ * number of frames accepted; the queue drops rather than blocks, so a short
+ * return means the ring is full. */
+unsigned hdmi_hstx_push_stereo(const int16_t *buf, unsigned frames);
+
+/* Expand an RGB332 framebuffer byte to RGB888.  Under HSTX this replaces
+ * graphics_get_palette() anywhere a framebuffer byte has to be turned back
+ * into a colour, such as the screenshot writer's BMP palette. */
+uint32_t hdmi_hstx_rgb332_to_rgb888(uint8_t p);
+
+/* time_us_32() at the most recent start of vertical sync.  The framebuffer is
+ * single-buffered under HSTX, so the frame pacer uses this to keep the
+ * emulator's rendering in phase with the beam. */
+uint32_t hdmi_hstx_vsync_us(void);
+
+/* Set up clk_hstx, and move clk_peri off the PLL this steals.
+ *
+ * Call from main() immediately after set_sys_clock_khz() and before
+ * stdio_init_all(): it changes clk_peri, so the UART and SPI divisors have to
+ * be computed after it, not before.  See the comment on the definition. */
+void hdmi_hstx_clock_init(void);
+#endif
+
+/*
+ * FRAMEBUFFER_PIXEL — turn a palette index into the byte to store.
+ *
+ * The PIO and composite drivers scan out palette indices and look the colour
+ * up in hardware, so this is the identity there and costs nothing.
+ *
+ * HSTX has no lookup table: the DMA hands framebuffer bytes straight to the
+ * TMDS encoder, so the framebuffer has to hold RGB332 colours instead. This
+ * macro is where the palette is applied, at the point a pixel is written
+ * rather than at scanout. graphics_set_palette() keeps working unchanged and
+ * still drives the colours; what it no longer does is change pixels that are
+ * already on screen.
+ */
+#ifdef HDMI_HSTX
+extern uint8_t hdmi_hstx_pal332[256];
+#define FRAMEBUFFER_PIXEL(i) (hdmi_hstx_pal332[(uint8_t)(i)])
+#else
+#define FRAMEBUFFER_PIXEL(i) ((uint8_t)(i))
 #endif
 
 void graphics_set_crt_active(bool active);

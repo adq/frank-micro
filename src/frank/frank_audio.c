@@ -28,6 +28,9 @@
 #if defined(HDMI_PIO_AUDIO)
 #include "frank_hdmi.h"
 #endif
+#if defined(HDMI_HSTX)
+#include "HDMI.h"           /* hdmi_hstx_push_stereo()                     */
+#endif
 
 #include <stdbool.h>
 
@@ -140,7 +143,7 @@ static void pwm_quiet(void) {
 
 void frank_audio_set_driver(int drv) {
     if (drv < 0 || drv >= FRANK_AUDIO_DRV_COUNT) drv = FRANK_AUDIO_DEFAULT;
-#if !defined(HDMI_PIO_AUDIO)
+#if !defined(HDMI_PIO_AUDIO) && !defined(HDMI_HSTX)
     /* No HDMI-audio backend in the HDMI_PIO build — route it to the I2S DAC. */
     if (drv == FRANK_AUDIO_HDMI) drv = FRANK_AUDIO_I2S;
 #endif
@@ -278,12 +281,22 @@ void give_audio_buffer(struct audio_buffer_pool *ac, struct audio_buffer *buffer
         return;
     }
 
-    /* HDMI (default) ─ resample 31250 -> 32000, mono -> stereo. */
-#if defined(HDMI_PIO_AUDIO)
+    /* HDMI (default) ─ resample 31250 -> 32000, mono -> stereo.
+     *
+     * 32000 is a standard HDMI audio rate and 31250 is not, so a sink has a
+     * tabulated N and CTS for the former and nothing for the latter.  Both
+     * embedded-audio backends want the same stream; only the sink differs. */
+#if defined(HDMI_PIO_AUDIO) || defined(HDMI_HSTX)
     static uint32_t mu   = 0;   /* 16.16 phase between prev and cur input  */
     static int16_t  prev = 0;   /* previous input sample (persists)        */
     static int16_t  stereo[256];
     uint32_t sc = 0;            /* stereo frames buffered for flush         */
+
+#if defined(HDMI_PIO_AUDIO)
+#define FRANK_HDMI_AUDIO_WRITE(buf, frames) frank_hdmi_audio_write((buf), (frames))
+#else
+#define FRANK_HDMI_AUDIO_WRITE(buf, frames) hdmi_hstx_push_stereo((buf), (frames))
+#endif
 
     for (uint32_t i = 0; i < n; i++) {
         int16_t cur = (int16_t)(((int32_t)src[i] * vol) / 100);
@@ -291,13 +304,13 @@ void give_audio_buffer(struct audio_buffer_pool *ac, struct audio_buffer *buffer
             int32_t out = prev + (((int32_t)(cur - prev) * (int32_t)mu) >> 16);
             stereo[sc * 2]     = (int16_t)out;
             stereo[sc * 2 + 1] = (int16_t)out;
-            if (++sc == 128) { frank_hdmi_audio_write(stereo, 128); sc = 0; }
+            if (++sc == 128) { FRANK_HDMI_AUDIO_WRITE(stereo, 128); sc = 0; }
             mu += RESAMP_STEP;
         }
         mu -= RESAMP_ONE;
         prev = cur;
     }
-    if (sc) frank_hdmi_audio_write(stereo, sc);
+    if (sc) FRANK_HDMI_AUDIO_WRITE(stereo, sc);
 #else
     (void)src; (void)n;
 #endif

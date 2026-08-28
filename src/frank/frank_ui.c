@@ -17,14 +17,20 @@
 #include "frank_screenshot.h"
 #include "ui_draw.h"
 #include "crash_handler.h"
+#include "board_config.h"
 
 #include <string.h>
 #include <stdio.h>
 
 /* ── layout ────────────────────────────────────────────────────────────── */
 #define SCREEN_H 256
-#define WIN_X   10
-#define WIN_W   300
+/* The window is sized from the framebuffer rather than fixed at the 320-wide
+ * PIO geometry, so the HSTX build's 720-wide screen gets a centred window
+ * instead of a small one in the corner.  Everything inside is laid out from
+ * content_w(), so the extra room shows up as longer filenames in the browser
+ * rather than as stretched chrome. */
+#define WIN_W   (MICRO_FB_BBC_W - 20)
+#define WIN_X   (MICRO_FB_X_OFFSET + 10)
 #define WIN_PAD 6
 
 /* Window box is sized to its content and centred vertically each render. */
@@ -78,6 +84,27 @@ static int  disk_dotdot_row(void)   { return disk_has_eject() ? 1 : 0; }
 static int  disk_entry_offset(void) { return disk_has_eject() ? 2 : 1; }
 static int  disk_total_rows(void)   { return disk_entry_offset() + g_frank_disk_entry_count; }
 
+/*
+ * Redraw gating, HSTX only.
+ *
+ * On the single-buffered path the overlay lives in the same memory the
+ * scanout beam is reading, and drawing it costs roughly as long as 20 raster
+ * lines.  Redrawing an unchanged overlay every frame therefore drags a tear
+ * band across it once per beat between the emulator's frame rate and the
+ * display's, which is slow and very visible.  Draw only when something
+ * actually changed.
+ *
+ * The PIO drivers composite into a back buffer, where a redraw is free of
+ * that hazard, so they keep redrawing every frame and their binaries are
+ * unchanged.
+ */
+#ifdef HDMI_HSTX
+static bool s_dirty = true;
+static void frank_ui_mark_dirty(void) { s_dirty = true; }
+#else
+#define frank_ui_mark_dirty() ((void)0)
+#endif
+
 /* ── public ────────────────────────────────────────────────────────────── */
 
 void frank_ui_init(void) {
@@ -96,9 +123,11 @@ void frank_ui_toast(const char *msg) {
     if (!msg) return;
     snprintf(s_toast, sizeof(s_toast), "%s", msg);
     s_toast_frames = 100;   /* ~2 s at 50 Hz */
+    frank_ui_mark_dirty();
 }
 
 void frank_ui_toggle(void) {
+    frank_ui_mark_dirty();
     if (s_state == UI_HIDDEN) {
         s_state           = UI_SETTINGS;
         s_setting_row     = 0;
@@ -111,6 +140,7 @@ void frank_ui_toggle(void) {
 void frank_ui_open_disk_menu(void) {
     s_menu_row = 0;
     s_state    = UI_DISK_MENU;
+    frank_ui_mark_dirty();
 }
 
 static void open_browser_for(int drv) {
@@ -308,6 +338,9 @@ static bool handle_disk_browser_key(unsigned int ks) {
 }
 
 bool frank_ui_handle_key(unsigned int ks) {
+    /* Any key the UI acts on can move a cursor, change a value or change
+     * page, so redraw after one rather than trying to work out what moved. */
+    frank_ui_mark_dirty();
     switch (s_state) {
         case UI_SETTINGS:         return handle_settings_page(ks);
         case UI_SETTINGS_CONFIRM: return handle_settings_confirm(ks);
@@ -425,7 +458,11 @@ static void render_disk_menu(uint8_t *fb, int stride) {
 
     const int label_w   = 9 * UI_CHAR_W;
     const int name_avail = cw - 8 - label_w;
-    const int max_chars  = name_avail / UI_CHAR_W;
+    /* Clamped to what a filename can actually be.  On a wide screen the row
+     * has room for more characters than FRANK_DISK_FILENAME_LEN allows, and
+     * the truncation branch below sizes a stack buffer from this. */
+    int max_chars = name_avail / UI_CHAR_W;
+    if (max_chars > FRANK_DISK_FILENAME_LEN - 1) max_chars = FRANK_DISK_FILENAME_LEN - 1;
 
     for (int row = 0; row < MENU_ROWS; ++row) {
         bool    sel = (row == s_menu_row);
@@ -556,15 +593,62 @@ static void render_disk_browser(uint8_t *fb, int stride) {
 
 /* ── main render ───────────────────────────────────────────────────────── */
 
+/* Geometry of the toast, shared by the renderer and the occlusion query so
+ * the two cannot drift apart. */
+#define TOAST_Y 4
+#define TOAST_H (UI_LINE_H + 2)
+static int toast_w(void)  { return (int)strlen(s_toast) * UI_CHAR_W + 12; }
+static int toast_x(int stride) { return (stride - toast_w()) / 2; }
+
+#ifdef HDMI_HSTX
+bool frank_ui_row_span(int y, int stride, int *x0, int *x1) {
+    bool any = false;
+    int lo = 0, hi = 0;
+
+    if (s_toast_frames > 0 && y >= TOAST_Y && y < TOAST_Y + TOAST_H) {
+        lo = toast_x(stride);
+        hi = lo + toast_w();
+        any = true;
+    }
+    if (s_state != UI_HIDDEN && y >= s_win_y && y < s_win_y + s_win_h) {
+        /* A tall window can reach up under the toast. Yield the union, so the
+         * blit does not repaint a strip between the two and leave a gap. */
+        if (any) {
+            if (WIN_X < lo) lo = WIN_X;
+            if (WIN_X + WIN_W > hi) hi = WIN_X + WIN_W;
+        } else {
+            lo = WIN_X;
+            hi = WIN_X + WIN_W;
+            any = true;
+        }
+    }
+
+    if (!any) return false;
+    *x0 = lo;
+    *x1 = hi;
+    return true;
+}
+#endif
+
 void frank_ui_render(uint8_t *fb, int stride, int height) {
     (void)height;
 
-    if (s_toast_frames > 0) {
-        --s_toast_frames;
-        int tw = (int)strlen(s_toast) * UI_CHAR_W + 12;
-        int tx = (stride - tw) / 2;
-        int ty = 4;
-        ui_fill_rect(fb, stride, tx, ty, tw, UI_LINE_H + 2, UI_COLOR_BG);
+    /* The toast's lifetime ticks whether or not anything gets redrawn, so
+     * this runs before the redraw gate below.  When it reaches zero the row
+     * span is released and the blit repaints those rows on the next frame. */
+    bool toast_visible = s_toast_frames > 0;
+    if (toast_visible) --s_toast_frames;
+
+#ifdef HDMI_HSTX
+    if (!s_dirty) return;
+    s_dirty = false;
+#endif
+
+    if (toast_visible) {
+        int tw = toast_w();
+        int tx = toast_x(stride);
+        int ty = TOAST_Y;
+        ui_fill_rect(fb, stride, tx, ty, tw, TOAST_H, UI_COLOR_BG);
         ui_draw_string(fb, stride, tx + 6, ty + 2, s_toast, UI_COLOR_ACCENT);
     }
 

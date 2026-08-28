@@ -29,15 +29,23 @@ void ui_draw_install_palette(void) {
     graphics_set_palette(UI_COLOR_BLACK,     0x000000);  /* solid black */
 }
 
+/*
+ * Callers pass UI_COLOR_* palette indices, and these two functions are the
+ * only places in this file that store a byte, so this is where an index
+ * becomes whatever the video driver wants in the framebuffer.  On the PIO and
+ * composite drivers FRAMEBUFFER_PIXEL() is the identity; under HSTX it applies
+ * the palette, because that driver scans out colours rather than indices.
+ * Every other routine here goes through one of these two.
+ */
 static inline void put_pixel(uint8_t *fb, int stride, int x, int y, uint8_t color) {
-    fb[(size_t)y * (size_t)stride + (size_t)x] = color;
+    fb[(size_t)y * (size_t)stride + (size_t)x] = FRAMEBUFFER_PIXEL(color);
 }
 
 void ui_fill_rect(uint8_t *fb, int stride, int x, int y, int w, int h, uint8_t color) {
     if (w <= 0 || h <= 0) return;
     for (int row = 0; row < h; ++row) {
         uint8_t *p = fb + (size_t)(y + row) * (size_t)stride + (size_t)x;
-        memset(p, color, (size_t)w);
+        memset(p, FRAMEBUFFER_PIXEL(color), (size_t)w);
     }
 }
 

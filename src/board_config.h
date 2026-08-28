@@ -83,10 +83,28 @@ static inline uint get_psram_pin(void) {
 #  endif
 #endif
 
-/* BBC Micro framebuffer: 320×256 8-bit indexed colour.
- * BBC native modes: 640×256 (2MHz) or 320×256 (1MHz).
- * We down-sample to 320 wide, keep 256 lines. */
-#define MICRO_FB_WIDTH    320
+/* BBC Micro framebuffer, 8 bits per pixel, 256 lines.
+ *
+ * BBC native modes are 640x256 (2 MHz) or 320x256 (1 MHz).
+ *
+ * The PIO video drivers scan out 320 pixels, so the 640-pixel rows b-em
+ * produces are point-sampled 2:1 on the way in.  That is lossless for the
+ * 40-column modes, where the engine doubles each pixel, and lossy for MODE 0
+ * and MODE 3, where 80-column text aliases badly.
+ *
+ * The HSTX driver scans out 720, which is the full width of its video data
+ * period, so all 640 engine pixels survive and the 40 pixels either side are
+ * black border inside the row.  The bytes are RGB332 colours there rather
+ * than palette indices; see FRAMEBUFFER_PIXEL() in drivers/HDMI.h.
+ */
+#ifdef HDMI_HSTX
+#  define MICRO_FB_WIDTH  720
+#  define MICRO_FB_BBC_W  640   /* engine pixels kept, centred in the row */
+#else
+#  define MICRO_FB_WIDTH  320
+#  define MICRO_FB_BBC_W  320
+#endif
+#define MICRO_FB_X_OFFSET ((MICRO_FB_WIDTH - MICRO_FB_BBC_W) / 2)
 #define MICRO_FB_HEIGHT   256
 #define MICRO_SCREEN_LINES 256
 

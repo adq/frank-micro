@@ -58,7 +58,13 @@ int frank_screenshot_save(const uint8_t *fb) {
 
     f_mkdir("/micro/screenshot");
 
-    const int W = MICRO_FB_WIDTH;   /* 320 */
+    /* Save the BBC picture, not the whole framebuffer.  They differ only
+     * under HSTX, whose rows are 720 bytes wide with the 640 engine pixels
+     * centred and a black pillarbox either side; MICRO_FB_X_OFFSET is 0 and
+     * the two widths are equal on every other driver. */
+    const int STRIDE = MICRO_FB_WIDTH;
+    const int X0 = MICRO_FB_X_OFFSET;
+    const int W = MICRO_FB_BBC_W;
     const int H = MICRO_FB_HEIGHT;  /* 256 */
     const int row_bytes = (W + 3) & ~3;
     const uint32_t palette_size    = 256 * 4;
@@ -86,15 +92,23 @@ int frank_screenshot_save(const uint8_t *fb) {
     hdr[28] = 8;  /* bpp */
     f_write(&f, hdr, 54, &bw);
 
-    /* Palette: read the authoritative RGB888 from the display driver via
-     * graphics_get_palette().  Write 32 entries at a time (128-byte chunks). */
+    /* Palette.  On the PIO and composite drivers a framebuffer byte is a
+     * palette index, so the authoritative RGB888 comes from the display
+     * driver.  Under HSTX the byte is already an RGB332 colour and the
+     * palette was applied when the pixel was written, so the BMP palette is
+     * the fixed expansion of all 256 RGB332 values instead.
+     * Written 32 entries at a time (128-byte chunks). */
     uint8_t pal4[128];
     for (int chunk = 0; chunk < 8; chunk++) {
         memset(pal4, 0, sizeof(pal4));
         int base = chunk * 32;
         for (int i = 0; i < 32; i++) {
             int idx = base + i;
+#ifdef HDMI_HSTX
+            uint32_t rgb = hdmi_hstx_rgb332_to_rgb888((uint8_t)idx);
+#else
             uint32_t rgb = graphics_get_palette((uint8_t)idx);
+#endif
             pal4[i * 4 + 0] = (uint8_t)(rgb & 0xFF);         /* B */
             pal4[i * 4 + 1] = (uint8_t)((rgb >> 8) & 0xFF);  /* G */
             pal4[i * 4 + 2] = (uint8_t)((rgb >> 16) & 0xFF); /* R */
@@ -106,7 +120,7 @@ int frank_screenshot_save(const uint8_t *fb) {
     uint8_t row_pad[4] = {0, 0, 0, 0};
     int pad = row_bytes - W;
     for (int y = H - 1; y >= 0; y--) {
-        const uint8_t *src = fb + (size_t)y * W;
+        const uint8_t *src = fb + (size_t)y * STRIDE + X0;
         f_write(&f, src, (UINT)W, &bw);
         if (pad > 0)
             f_write(&f, row_pad, (UINT)pad, &bw);

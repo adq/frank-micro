@@ -54,10 +54,11 @@ typedef enum {
     FRANK_AUDIO_DRV_COUNT,
 } frank_audio_driver_t;
 
-/* Default audio backend depends on the selected video/audio driver:
+/* Default audio backend depends on the selected video driver:
  *   HDMI_PIO_AUDIO — audio is embedded in the HDMI stream (FRANK_AUDIO_HDMI).
+ *   HSTX           — likewise, in HSTX data islands.
  *   HDMI_PIO       — no HDMI-audio path exists, so default to the I2S DAC. */
-#if defined(HDMI_PIO_AUDIO)
+#if defined(HDMI_PIO_AUDIO) || defined(HDMI_HSTX)
 #  define FRANK_AUDIO_DEFAULT FRANK_AUDIO_HDMI
 #else
 #  define FRANK_AUDIO_DEFAULT FRANK_AUDIO_I2S

@@ -62,7 +62,7 @@ static const char *GAMEPAD_LABELS[] = { "Off", "Arrows", "Z X : /" };
 static const char *AUDIO_LABELS[]   = { "HDMI", "I2S", "PWM" };
 
 /* Audio-driver choices exposed in the F12 menu depend on the build:
- *   HDMI_PIO_AUDIO — HDMI / I2S / PWM (HDMI data-island audio is available).
+ *   HDMI_PIO_AUDIO, HSTX — HDMI / I2S / PWM (embedded HDMI audio is available).
  *   HDMI_PIO, COMPOSITE — I2S / PWM only (no HDMI-embedded audio path), so
  *   the menu starts at FRANK_AUDIO_I2S and never offers "HDMI". */
 #if defined(PLATFORM_FJ)
@@ -70,7 +70,7 @@ static const char *AUDIO_LABELS[]   = { "HDMI", "I2S", "PWM" };
     * TLV320DAC3100 codec, which is an I2S sink, so there is no PWM output on
     * the board at all and "PWM" comes out of the menu.  The enum order (HDMI,
     * I2S, PWM) means first=HDMI and count=2 gives exactly HDMI and I2S. */
-#  if defined(HDMI_PIO_AUDIO)
+#  if defined(HDMI_PIO_AUDIO) || defined(HDMI_HSTX)
 #    define AUDIO_FIRST_CHOICE  FRANK_AUDIO_HDMI
 #    define AUDIO_NUM_CHOICES   2
 #  else
@@ -78,6 +78,9 @@ static const char *AUDIO_LABELS[]   = { "HDMI", "I2S", "PWM" };
 #    define AUDIO_NUM_CHOICES   1
 #  endif
 #elif defined(HDMI_PIO_AUDIO)
+#  define AUDIO_FIRST_CHOICE  FRANK_AUDIO_HDMI
+#  define AUDIO_NUM_CHOICES   3
+#elif defined(HDMI_HSTX)
 #  define AUDIO_FIRST_CHOICE  FRANK_AUDIO_HDMI
 #  define AUDIO_NUM_CHOICES   3
 #else
@@ -213,7 +216,7 @@ static void apply_monitor(void) {
 }
 
 void frank_settings_apply_live(void) {
-#if !defined(HDMI_PIO_AUDIO)
+#if !defined(HDMI_PIO_AUDIO) && !defined(HDMI_HSTX)
     /* HDMI audio is unavailable in the HDMI_PIO build; fold any persisted
      * "HDMI" selection (e.g. from a micro.ini written by an HDMI_PIO_AUDIO
      * build) onto the I2S DAC so the option is never silently dead. */
