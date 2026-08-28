@@ -70,6 +70,203 @@ scaling; `adafruit/pico-mac`'s `clocking.c` supplies the clock plan and the PLL
 search. Both are MIT. Neither is vendored into this repository yet and neither
 should be until a phase needs it. `docs/FRUIT-JAM.md` section 6, costs 1 and 2.
 
+**Superseded 2026-08-26. A different driver was vendored, and neither of those
+two repositories is on the build machine.** What is on it is
+`fhoedemakers/pico_shared`'s `drivers/pico_hdmi`, by way of the vendored copy
+inside `fhoedemakers/fruitjam-doom`. It is GPL-3.0, which frank-micro can take
+directly, it runs on this board, and it already implements the HDMI data
+islands that cost 3 below calls unverified. It is now `drivers/hstx/`. Four
+things were changed: 720x576p50 timings, an RGB332 expander configuration in
+place of RGB555, the scanline callback and its two line buffers deleted so the
+pixel DMA reads framebuffer rows directly, and `DMA_IRQ_0` moved to
+`DMA_IRQ_1` because I2S owns `DMA_IRQ_0` in this tree.
+
+### 2026-08-26: HSTX was built anyway, as a quality change rather than a fallback
+
+Phase 3 was contingent on PIO-USB failing at 252 MHz. It did not fail, so the
+port shipped on option C. The HSTX driver was written afterwards for the two
+picture faults option C carries: the 16-line clip recorded in
+`docs/FRUIT-JAM.md` section 3, and the MODE 0 / MODE 3 horizontal loss in
+`CLAUDE.md` section 4. Both are properties of the PIO video path. It is a
+fourth `HDMI_DRIVER`, not a replacement: `HDMI_PIO_AUDIO` remains the default
+on every board including this one.
+
+Three decisions inside it are worth knowing.
+
+**The framebuffer is 720x256 and single-buffered.** Keeping all 640 engine
+pixels is what fixes the horizontal loss, and at 8bpp that is 180 KB, so there
+is no room for a second buffer. Tearing is handled by phase-locking the
+emulator's frame to vsync in `frank_perf_tick()`, with the emulator started
+slightly ahead of the beam because the beam is the faster of the two. The lead
+is `HSTX_FRAME_LEAD_US`, currently 1500. **This is the part most likely to
+need adjusting on hardware.** If it cannot be made to work, the fallback is a
+double-buffered 320x256 framebuffer, which is a change to `MICRO_FB_BBC_W` in
+`src/board_config.h` plus horizontal doubling in the DMA rather than a
+rewrite.
+
+**Rows are 720 bytes wide, not 640.** A video data period is exactly
+`MODE_H_ACTIVE_PIXELS` and the DMA reads one byte per pixel, so the pillarbox
+border has to be black pixels inside the row. Making the row the full width
+was the alternative to splitting each active line into three DMA transfers,
+and it keeps the vendored command lists untouched. It costs 20 KB.
+
+**`clk_sys` was not moved.** The first plan followed pico-mac and rebuilt the
+whole clock tree around `pll_usb` at 528 MHz. That was unnecessary: 252 MHz is
+already proven here with PIO-USB, and the only thing that actually needs a new
+clock is `clk_hstx` at 135 MHz. So `pll_sys` is left alone and `pll_usb` is
+retasked to 135 MHz instead, with `clk_usb` and `clk_adc` stopped first. The
+cost is the native USB controller, which this board does not use.
+
+Everything above compiles; all eleven build variants link. Hardware results
+are in the entries below.
+
+### 2026-08-26: retasking pll_usb silently took clk_peri with it
+
+First hardware run: HSTX video came up on the first try, and the board then
+stopped at the "SD card could not be mounted" screen with a card in the slot.
+
+`set_sys_clock_khz()` leaves clk_peri attached to **pll_usb**, undivided, at
+48 MHz. That is `set_sys_clock_pll()` in the SDK's
+`hardware_clocks/clocks.c`, which takes that branch unless
+`PICO_CLOCK_ADJUST_PERI_CLOCK_WITH_SYS_CLOCK` is set, and nothing here sets
+it. So pll_usb is not just the USB PLL: it is the peripheral PLL too, which
+the name hides.
+
+Retasking it to 135 MHz for clk_hstx therefore dragged clk_peri from 48 MHz to
+135 MHz while `clock_get_hz(clk_peri)` still reported 48. Everything that
+derives a divisor from it came out 2.8125 times too fast. SD is on hardware
+SPI0 (`drivers/sdcard/sdcard.c` uses `spi_set_baudrate`), and its
+`CLK_FAST` of 30 MHz clamped to clk_peri/2, so the data phase ran at 67.5 MHz.
+The card answers during the slow initialisation phase and then fails as soon
+as the fast clock is selected, which is why the symptom is a mount failure
+rather than a card that is not detected. UART1 was 2.8 times off too, so the
+console was unreadable at the same time.
+
+The fix is in `hdmi_hstx_clock_init()`: re-point clk_peri at `clk_sys / 3`,
+84 MHz, **before** touching pll_usb. That decouples it from the video clock
+entirely, so changing the HSTX mode later cannot break SPI again. clk_peri's
+divider is 2 bits and integer-only, so 3 is the largest divisor available and
+84 MHz is the closest it can get to the SDK's 48.
+
+The function had to move as well. It now runs in `main()` immediately after
+`set_sys_clock_khz()` and before `stdio_init_all()`, because a divisor
+computed before clk_peri changes is a divisor computed against the wrong
+number. It used to run from `graphics_init()`, which is after both the
+console and the SD mount.
+
+**Anything else that retasks a PLL on this chip should check clk_peri first.**
+
+### 2026-08-26: single buffering breaks compositing, not just tearing
+
+Second hardware run: the BBC picture was correct, and the F11/F12 overlay
+decayed row by row while it was on screen.
+
+The tree composites the overlay once per frame, in `x_gui_end_scanline()`,
+after all 256 rows have been blitted. That is correct with two buffers: the
+composited buffer is the one presented. With one buffer it is not, and the
+reason is the tear control rather than the overlay code.
+
+The emulator writes each row *ahead* of the scanout beam, which is what keeps
+the picture from tearing. Working the two timelines through: the beam reads
+row r at about 2.4 ms + 64 us x r after vsync, and the next frame's blit
+erases row r at about -1.5 ms + 78 us x r. Erase comes before read for every
+row on screen. So the overlay was being wiped before the beam ever reached
+it, and only restored at the end of the frame, after the beam had passed.
+Rows drop out progressively as the two 50 Hz rates drift against each other,
+which is exactly what it looked like.
+
+The fix inverts the responsibility: `blit_row()` asks
+`frank_ui_row_span()` which horizontal span of the row the overlay owns and
+skips it, rather than repainting it and relying on a later composite. The
+picture around the window keeps updating. `frank_ui_render()` still runs each
+frame and still writes the window, but now into rows nothing else has
+touched, and it runs when the beam is near the bottom of the frame, below
+almost all of the window.
+
+The general rule for this driver: **on the single-buffered path, anything
+drawn on top of the emulator picture has to be written per row, in step with
+the blit, not composited after it.** A future overlay that ignores this will
+show the same decay.
+
+`frank_ui_row_span()` is `#ifdef HDMI_HSTX`; the PIO boards keep the
+composite-after model and their binaries are unchanged.
+
+Two follow-ons came out of the same change, both on hardware.
+
+**A slow tear band crawling up the overlay.** Drawing the window costs about
+as long as the beam takes to cross 20 rows, and it was being redrawn every
+frame whether or not anything had changed. Once per beat between the
+emulator's frame rate and the display's, that redraw crossed the beam. The
+band's height and its speed both matched that arithmetic. Fixed by gating
+the redraw on a dirty flag, so an unchanged overlay is not rewritten at all;
+`frank_ui_handle_key()`, `frank_ui_toggle()`, `frank_ui_open_disk_menu()` and
+`frank_ui_toast()` set it. The toast's countdown still ticks every frame,
+before the gate.
+
+**Screenshots taken from the F12 menu contained the top half of the menu.**
+Not a mid-frame keypress: keys are polled once per emulator frame. The
+rasteriser's frame boundary is what does not line up, because
+`s_scanline_number` wraps somewhere inside `m6502_exec` rather than at its
+edge. So on the frame where the menu closes, the rows emitted before the
+keypress had still yielded their span to the overlay and kept it, while the
+rows after it were painted clean, and the capture at row 255 got both.
+`x_gui_end_scanline()` now holds a pending capture until the overlay is
+hidden and two whole rasteriser frames have repainted over it.
+
+The first attempt at that wait was wrong in a way worth recording, because it
+looked right and failed intermittently. It armed the countdown from the
+overlay's visibility, checked at the frame-complete point. But the keypress
+that requests a screenshot from the F12 menu also closes that menu, so by the
+time the check ran the overlay already read as hidden while the frame in
+progress was still half full of it, and the capture went ahead on the mixed
+frame. It appeared to work whenever a leftover toast was still counting down,
+because that kept `frank_ui_is_visible()` true and armed the countdown by
+accident. The countdown is now armed on the rising edge of the request
+itself, which does not depend on what the overlay is doing.
+
+While there, the BMP is now cropped to the 640-pixel picture rather than the
+full 720-byte row, so the pillarbox border does not end up in the file.
+`MICRO_FB_X_OFFSET` is 0 elsewhere, so the other drivers are unaffected.
+
+### 2026-08-28: the two faults the HSTX build exists to fix are fixed
+
+Confirmed on hardware. MODE 0 and MODE 3 render their 80 columns sharply,
+which was the point of carrying 640 engine pixels through to the framebuffer,
+and the BBC's full frame reaches the monitor rather than losing its bottom 16
+scanlines. Video, the SD card and both overlays all work.
+
+So the trade the earlier revisions of `docs/FRUIT-JAM.md` described as "a
+trade, not an upgrade" comes out in favour of HSTX on this board, at the cost
+of single buffering and everything that followed from it in the entries
+above. `HDMI_PIO_AUDIO` remains the default; `HSTX` is opt-in.
+
+Mounting a disc from the F11 browser and SHIFT-BREAK booting it also works,
+which exercises the SD path under load rather than just at mount time.
+Screenshots are clean once the capture ordering was fixed.
+
+**MODE 7 is confirmed, so deleting the dedicated teletext renderer was
+right.** That renderer exists because the PIO path point-samples 640 engine
+pixels into 320, which lands on the SAA5050's interpolated blend columns; it
+reconstructs the six real glyph columns from offsets {0,2,5,8,11,14}. At 640
+there is nothing to reconstruct, so `blit_row()` ignores the teletext flag
+and copies the row. Colour, double height, and contiguous and separated
+mosaic graphics all render correctly. The old path is still compiled for the
+PIO drivers, not deleted.
+
+The test disc that established this is built by `tools/mkssd.py`, which makes
+a DFS image from plain text files meant to be run with `*EXEC`. Disc writes
+are off in this build, so building images on the host is the only way to get
+a program onto the machine.
+
+The no-SD-card error screen works, static rather than animated. That is
+deliberate: it animated by cycling a 64-entry palette under pixels already on
+screen, and a palette write repaints nothing on this driver. Redrawing 180 KB
+of plasma per frame to animate the screen that says the card is missing was
+not worth it. The watchdog reboot on that screen is unchanged and still
+wrong; see `docs/INVESTIGATION.md` finding 4.
+
+Still unexercised: audio on either backend, and stability over hours.
+
 ### 2026-08-22: under HSTX the framebuffer holds RGB332 bytes, not palette indices
 
 This is the decision that keeps the video path free of a per-line CPU pass. It

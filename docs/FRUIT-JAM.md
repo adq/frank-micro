@@ -258,6 +258,9 @@ What the driver does *not* do is make the codec produce sound. See section 5.
 
 ### Inherited limitation: 16 scanlines are already being dropped
 
+Applies to the PIO video path only. `HDMI_DRIVER=HSTX` shows all 256 lines;
+see the note at the end of this section.
+
 The default video path carries across to the Fruit Jam unchanged, and so does a
 limitation that is not recorded in `CLAUDE.md` section 4 and is not
 Fruit-Jam-specific. It matters here because it constrains what phase 3's HSTX
@@ -289,6 +292,11 @@ the modes "the vendored libdvi build can do" but that "this driver only wires
 up 640x480p60". 50 Hz is also the rate the emulator already runs at:
 `al_wait_for_event()` returns one timer event per frame
 (`src/bem/pico/stub_allegro5/al_stub.cpp:784-787`).
+
+**Resolved 2026-08-26 for the HSTX path.** `HDMI_DRIVER=HSTX` runs 720x576p50
+and maps the 256 rows onto 512 of the 576 active lines, two raster lines each,
+with a 32-line border top and bottom. Nothing is clipped. The PIO builds still
+drop the 16 lines and still will.
 
 Two consequences for this port. First, do not describe phase 1 as displaying the
 full BBC screen, because it will not. Second, this constrains only the PIO video
@@ -735,6 +743,17 @@ The usual shape, and what the pico-examples DVI encoder does, is two chained DMA
 channels: one streaming the active pixel run, one replaying a small command list
 for front porch, sync and back porch. Neither core is in the loop.
 
+> **Built 2026-08-26, and not the way this section expected.** Option B was
+> implemented as a fourth `HDMI_DRIVER`, not because option C failed but for
+> the two picture faults option C carries. Two premises below turned out to be
+> wrong. Neither `pico-mac` nor `Framebuffer_RP2350.c` is on the build machine,
+> so neither could be vendored; what was vendored instead is
+> `fhoedemakers/pico_shared`'s `drivers/pico_hdmi`, GPL-3.0, from the copy
+> inside `fruitjam-doom`. And cost 3 below is wrong: that driver implements
+> HDMI data islands, so the `HSTX` build keeps HDMI-embedded audio. The
+> clock plan also changed; see `docs/HANDOFF.md`. The rest of this section is
+> the reasoning that led there and is left as written.
+
 #### Cost 1: the driver has to be written, but not from scratch
 
 `drivers/HDMI_vga_hstx.c` is not a starting point. That file targets VGA through
@@ -911,6 +930,15 @@ giving p0 p1 p2 p3 p0 p1 p2 p3. `N_SHIFTS` combined with a one-pixel-per-word
 DMA transfer can, and that is what the Doom port does.
 
 #### Cost 3: HSTX cannot generate HDMI data islands as it stands
+
+> **Wrong, established 2026-08-26.** The argument below is sound about
+> `expand_tmds`, and its own suggestion is what works: pre-encoded TERC4
+> symbols go out through the raw shift path with the packet timing interleaved
+> into the command list. `fhoedemakers/pico_shared`'s `pico_hdmi` does exactly
+> that, in `hstx_packet.c` and `hstx_data_island_queue.c`, and it is now
+> vendored as `drivers/hstx/`. The `HSTX` build carries HDMI-embedded audio and
+> the `FRANK_AUDIO_HDMI` backend stays in the F12 menu. "Nobody has done it
+> here" was true when written; somebody had done it elsewhere.
 
 HDMI-embedded audio is a property of the `frank-hdmi-sound` PIO driver, not of
 HSTX, and the reason is specific rather than incidental.

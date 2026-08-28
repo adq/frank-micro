@@ -22,7 +22,7 @@ Four RP2350 boards. Each has its own pin layout. All output HDMI video; HDMI-emb
 | m2 | [Murmulator 2.0](https://murmulator.ru) / [FRANK](https://rh1.tech/projects/frank?area=about) | HDMI (PIO) | HDMI, I2S, PWM | PS/2 or USB |
 | m1 | Murmulator 1.x | HDMI (PIO) | HDMI, I2S, PWM | PS/2 or USB |
 | z0 | [Waveshare RP2350-PiZero](https://www.waveshare.com/rp2350-pizero.htm) | HDMI (PIO) | HDMI, I2S, PWM | PS/2 or USB |
-| fj | [Adafruit Fruit Jam](https://www.adafruit.com/product/6200) | DVI (PIO) | HDMI, I2S | USB only |
+| fj | [Adafruit Fruit Jam](https://www.adafruit.com/product/6200) | DVI (PIO), or DVI (HSTX) | HDMI, I2S | USB only |
 
 Select the platform at build time: `PLATFORM=m1 ./build.sh`. Default is `m2`.
 
@@ -42,6 +42,13 @@ use it:
 - **The serial console is on UART1, GPIO 8 and 9**, on the 2x16 header, rather
   than on USB. This is the one platform where a `USB_HID=1` build still has a
   console.
+- **It can drive the DVI connector from the RP2350's HSTX peripheral** instead
+  of PIO, with `HDMI_DRIVER=HSTX`. That mode is 720x576p50 and shows the whole
+  BBC screen: the PIO path drops the bottom 16 scanlines and halves the
+  horizontal resolution of MODE 0 and MODE 3, and neither happens here. It
+  keeps HDMI-embedded audio and frees the PIO0 block entirely. The trade is
+  that it has no USB-CDC console at all, because it retasks the USB PLL to
+  clock the video, so use the UART console above. Not yet tested on hardware.
 
 ## Features
 
@@ -68,6 +75,9 @@ use it:
 - BBC display MODEs 0–7, including teletext MODE 7.
 - Monitor styles: colour, green, amber.
 - HDMI (PIO) on all platforms, 640×480p60. HDMI-embedded audio on the default build.
+- On the Fruit Jam, optional HSTX video at 720×576p50 (`HDMI_DRIVER=HSTX`),
+  which shows all 256 BBC scanlines and keeps all 640 pixels of the 80-column
+  modes.
 
 ### Storage
 
@@ -245,6 +255,7 @@ PLATFORM=m2 HDMI_DRIVER=COMPOSITE ./build.sh      # M2, composite PAL/NTSC TV (I
 PLATFORM=m1 ./build.sh                            # Murmulator 1.x
 PLATFORM=z0 ./build.sh                            # Waveshare RP2350-PiZero
 PLATFORM=fj USB_HID=1 ./build.sh                  # Adafruit Fruit Jam (needs USB_HID=1)
+PLATFORM=fj USB_HID=1 HDMI_DRIVER=HSTX ./build.sh # Fruit Jam, HSTX video at 720x576p50
 USB_HID=1 ./build.sh                              # Enable USB HID input
 ```
 
@@ -257,7 +268,7 @@ All options are environment variables (or CMake cache entries).
 | Variable      | Default          | Effect |
 |---------------|------------------|--------|
 | `PLATFORM`    | `m2`             | `m1` / `m2` / `z0` / `fj` |
-| `HDMI_DRIVER` | `HDMI_PIO_AUDIO` | `HDMI_PIO_AUDIO` (HDMI-embedded audio) / `HDMI_PIO` (PIO HDMI **or** VGA, auto-detected from the ribbon; I2S/PWM audio) / `COMPOSITE` (software PAL/NTSC composite TV on `TV_PIN`; I2S/PWM audio; forces 378 MHz, not on `z0` or `fj`) |
+| `HDMI_DRIVER` | `HDMI_PIO_AUDIO` | `HDMI_PIO_AUDIO` (HDMI-embedded audio) / `HDMI_PIO` (PIO HDMI **or** VGA, auto-detected from the ribbon; I2S/PWM audio) / `COMPOSITE` (software PAL/NTSC composite TV on `TV_PIN`; I2S/PWM audio; forces 378 MHz, not on `z0` or `fj`) / `HSTX` (RP2350 HSTX DVI at 720×576p50 with HDMI-embedded audio; `fj` only; no USB-CDC console) |
 | `CPU_SPEED`   | `252`            | Core clock in MHz |
 | `USB_HID`     | `0`              | `1` enables USB HID host (keyboard, gamepad, XInput). Disables USB CDC stdio, except on `fj`, whose console is on UART1. Required on `fj`, which has no other input. |
 
@@ -307,6 +318,7 @@ Third-party drivers and libraries:
 | TinyUSB + HID host | Ha Thach | MIT | `drivers/usbhid/` |
 | Pico-PIO-USB (USB host on PIO pins) | sekigon-gonnoc | MIT | `lib/Pico-PIO-USB/` |
 | TLV320DAC3100 codec register sequence | Matt Evans (via adafruit/pico-mac) | MIT | `drivers/tlv320dac3100.c` |
+| HSTX DVI/HDMI driver with data-island audio | Frank Hoedemakers (`fhoedemakers/pico_shared`) | GPL-3.0 | `drivers/hstx/` |
 | XInput host | Ryan Wendland | MIT | `drivers/usbhid/xinput_host.*` |
 | dlmalloc | Doug Lea | CC0 / public domain | `drivers/dlmalloc.c` |
 
@@ -323,6 +335,7 @@ Thanks to:
 - **Ha Thach** for TinyUSB, **Ryan Wendland** for the XInput host driver.
 - **sekigon-gonnoc** for [Pico-PIO-USB](https://github.com/sekigon-gonnoc/Pico-PIO-USB), which is the only way to attach a keyboard to the Fruit Jam.
 - **Matt Evans** for [pico-umac](https://github.com/evansm7/pico-umac) and **Adafruit** for the [Fruit Jam fork](https://github.com/adafruit/pico-mac) of it, whose TLV320DAC3100 bring-up sequence the codec driver is adapted from.
+- **Frank Hoedemakers** for [pico_shared](https://github.com/fhoedemakers/pico_shared), whose `pico_hdmi` driver is the basis of the HSTX video path, including the HDMI data-island audio that makes embedded sound work without PIO.
 - **Doug Lea** for dlmalloc.
 - The **Murmulator** community for hardware designs and testing.
 - The **Raspberry Pi Foundation** for the RP2350 and the Pico SDK.

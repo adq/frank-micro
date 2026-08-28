@@ -163,12 +163,16 @@ name.
   wraps the whole of `src/bem/i8271.c`. Only the WD1770 is live. A model
   selecting `FDC_I8271` is silently routed to the WD1770 by
   `src/bem/thumb_cpu/src/cpu_mem.c:419-446`.
-- **MODE 0 and MODE 3 lose half their horizontal resolution.**
-  `src/frank/frank_gui.c:134-135` point-samples 640 engine pixels into a 320-wide
-  framebuffer. Lossless for the 40-column modes, where the engine doubles each
-  pixel; lossy for the 80-column ones, where 80-column text aliases badly. The
-  comment above it defends the approach by counting colours, which is not the
-  quantity being lost.
+- **MODE 0 and MODE 3 lose half their horizontal resolution, except under
+  HSTX.** `blit_row()` in `src/frank/frank_gui.c` point-samples 640 engine
+  pixels into a 320-wide framebuffer. Lossless for the 40-column modes, where
+  the engine doubles each pixel; lossy for the 80-column ones, where text
+  aliases badly. The `HSTX` build keeps all 640, so this and the 16-line clip
+  below are both properties of the PIO video path rather than of the emulator.
+- **The bottom 16 scanlines are dropped on the PIO video path.** 640x480p60
+  gives a 240-line logical canvas and `frank_hdmi_set_buffer()` clamps a
+  256-line framebuffer to it, so framebuffer rows 240 to 255 never reach the
+  monitor. Not a property of the emulator: `HSTX` shows all 256.
 - **Only 8 physical colours.** `rgb555_to_bbc()` at `src/frank/frank_gui.c:59-64`
   thresholds each channel and returns 0 to 7. No Video NuLA palette.
 - **No tube coprocessors, no SID, no save states, no VDFS, no tape loaders.**
@@ -255,20 +259,28 @@ variant tells you nothing. It also writes `version.txt` before building
 | Variable | Default | Effect |
 |---|---|---|
 | `PLATFORM` | `m2` | `m1`, `m2`, `z0`, `fj` |
-| `HDMI_DRIVER` | `HDMI_PIO_AUDIO` | see below |
+| `HDMI_DRIVER` | `HDMI_PIO_AUDIO` | `HDMI_PIO`, `COMPOSITE`, `HSTX`; see below |
 | `CPU_SPEED` | `252` | core clock in MHz |
 | `USB_HID` | `0` | `1` enables the USB HID host and disables USB CDC stdio |
 
 `build.sh` maps the `USB_HID` environment variable to the `USB_HID_ENABLED` CMake
 option; the two names differ.
 
-### The three video builds
+### The four video builds
 
 | `HDMI_DRIVER` | Drivers | Audio | Constraints |
 |---|---|---|---|
-| `HDMI_PIO_AUDIO`, default | `HDMI_audio.c`, `HDMI_vga.c`, `CMakeLists.txt:153-154` | HDMI-embedded, plus I2S and PWM | Needs the submodule, `:142`. Audio resampled 31250 to 32000 Hz, `:150` |
-| `HDMI_PIO` | `HDMI.c`, `hdmi_scanline.S`, `HDMI_vga.c`, `:266-268` | I2S and PWM only | HDMI or VGA detected at runtime from the ribbon. Note it defines `HDMI_PIO=1` on the `drivers` library but not on `frank-micro`, so application code detects it by the absence of the other two macros |
-| `COMPOSITE` | `HDMI_tv.c` plus `tv_driver`, `:194-197`, `:228` | I2S and PWM only | Forces 378 MHz, `:51-54`. Fatal on z0, `:44-46` |
+| `HDMI_PIO_AUDIO`, default | `HDMI_audio.c`, `HDMI_vga.c` | HDMI-embedded, plus I2S and PWM | Needs the `frank-hdmi-sound` submodule. Audio resampled 31250 to 32000 Hz |
+| `HDMI_PIO` | `HDMI.c`, `hdmi_scanline.S`, `HDMI_vga.c` | I2S and PWM only | HDMI or VGA detected at runtime from the ribbon. Note it defines `HDMI_PIO=1` on the `drivers` library but not on `frank-micro`, so application code detects it by the absence of the other two macros |
+| `COMPOSITE` | `HDMI_tv.c` plus `tv_driver` | I2S and PWM only | Forces 378 MHz. Fatal on z0 and on fj |
+| `HSTX` | `HDMI_hstx.c` plus `drivers/hstx/` | HDMI-embedded, plus I2S | **`fj` only.** 720x576p50, RGB332, single-buffered. Retasks `pll_usb`, so there is no USB-CDC console in this build. Defines `HDMI_HSTX=1` on both the library and the executable, because the framebuffer format changes what application code writes |
+
+The `HSTX` build is the odd one out in a way worth knowing before reading any
+drawing code: its framebuffer holds RGB332 colour bytes, not palette indices,
+because the HSTX peripheral has no lookup table. `graphics_set_palette()` still
+decides what colour an index paints, but it is applied when the pixel is
+written, through `FRAMEBUFFER_PIXEL()` in `drivers/HDMI.h`, so it changes
+nothing already on screen. See section 6.
 
 ### Clock and voltage
 
@@ -439,11 +451,70 @@ It is also why the audio path resamples to 32,000 Hz rather than sending 31,250
 values carried in a data island, and those are tabulated per standard sample
 rate. 31,250 is not a standard rate.
 
-A note for anyone tempted by HSTX: it does TMDS encoding in hardware, but it has
-no palette lookup and no TERC4 mode, so it would need a CPU index-to-RGB565 pass
-per line and would give up HDMI audio unless data islands were reimplemented
-through its raw shift path. `docs/FRUIT-JAM.md` section 6 option B has the detail
-and the register citations. It is a trade, not an upgrade.
+#### The HSTX driver, `drivers/HDMI_hstx.c` plus `drivers/hstx/`
+
+Not PIO at all. The HSTX peripheral does TMDS encoding in hardware from its own
+FIFO, so the data path is DMA to FIFO to pins with neither core in it.
+
+| Step | Location |
+|---|---|
+| Command lists, sync, data islands, the line IRQ | `drivers/hstx/video_output.c` |
+| TERC4 packet and infoframe encoding | `drivers/hstx/hstx_packet.c` |
+| Audio packet ring | `drivers/hstx/hstx_data_island_queue.c` |
+| `graphics_*` API, clocks, palette, audio push | `drivers/HDMI_hstx.c` |
+
+Three things about it differ from both PIO drivers.
+
+**No palette lookup, so the framebuffer holds colours.** Bytes are RGB332,
+laid out `RRRGGGBB`, and the pixel DMA hands them straight to the encoder.
+`FRAMEBUFFER_PIXEL()` in `drivers/HDMI.h` is where an index becomes a colour;
+it is the identity in every other build. The consequence to remember is that a
+palette write does not repaint. That is why the boot error screen's plasma is
+static under HSTX (`frank_platform.c`): it animated by rotating the palette.
+
+**No line buffer and no per-line CPU work.** `fb_row_addr[]` resolves every
+raster line to a source address once, when the geometry is set, so the line
+IRQ writes two DMA registers and returns. Upstream called a scanline callback
+here costing about 21 us per line; that is gone. Core 1 runs the IRQ and the
+audio task and is otherwise idle.
+
+**The framebuffer is 720x256 and single-buffered.** A video data period is
+exactly 720 pixels, so rows are 720 bytes and the 40-pixel pillarbox is black
+pixels inside the row. 640 engine pixels are kept, which is what fixes the
+MODE 0 and MODE 3 loss in section 4, and 256 rows are doubled onto 512 of the
+576 active lines, which is what fixes the 16-line clip. There is no room for a
+second 180 KB buffer, so tearing is handled by phase-locking the emulator
+frame to vsync in `frank_perf_tick()`; `HSTX_FRAME_LEAD_US` is the tuning
+knob.
+
+That has a consequence beyond tearing, and it catches anything drawn over the
+emulator picture. Each row is written ahead of the beam, so the
+composite-after-the-frame model the overlay uses on the PIO drivers does not
+work: the next frame's blit erases the overlay before the beam reaches it and
+restores it only after the beam has passed, which shows as the overlay
+decaying row by row. `blit_row()` therefore asks `frank_ui_row_span()` which
+span of the row the overlay owns and skips it. **On this path, anything drawn
+on top of the picture has to be written per row, in step with the blit.**
+
+Clocks are the other thing to know. `clk_hstx` has to be exactly 135 MHz, five
+times the 27.0 MHz pixel clock, and `clk_sys` stays at 252 MHz on `pll_sys`.
+135 is not an integer divisor of 252 and a fractional divider puts jitter on
+the TMDS bit clock, so `hdmi_hstx_clock_init()` retasks `pll_usb` to 135 MHz
+and stops `clk_usb` and `clk_adc`. That leaves the native USB controller
+without a clock, which costs nothing on the Fruit Jam because the host is
+PIO-USB and the console is UART1, but it does mean **no USB-CDC in an HSTX
+build.**
+
+**`pll_usb` is also the peripheral PLL, and that is a trap.**
+`set_sys_clock_khz()` leaves `clk_peri` attached to `pll_usb`, undivided, at
+48 MHz, so retasking that PLL moves the UART and SPI0 clock with it while
+`clock_get_hz(clk_peri)` still reports the old value. It presents as an SD
+card that will not mount with a card in the slot. `hdmi_hstx_clock_init()`
+therefore re-points `clk_peri` at `clk_sys / 3`, 84 MHz, before it touches
+`pll_usb`, and it is called from `main()` immediately after
+`set_sys_clock_khz()` rather than from `graphics_init()`, because every
+divisor downstream has to be computed after the change. See
+`docs/HANDOFF.md`.
 
 ### Audio path
 
@@ -498,7 +569,7 @@ for.**
 
 | Block | Claimant | State machines |
 |---|---|---|
-| PIO0 | video, three TMDS serialisers | 3 |
+| PIO0 | video, three TMDS serialisers; **free in an `HSTX` build** | 3, or 0 |
 | PIO1 | PIO-USB host, and its transmit program must be at instruction offset 0 | 3 |
 | PIO2 | I2S, once the codec driver exists | 1 |
 
@@ -506,6 +577,15 @@ Nothing is spare there either, and PIO1 in particular cannot be shared: the
 library places its transmit program at offset 0, so the block has to be one that
 nothing else has programmed. PIO1 rather than PIO2 for USB is forced, not chosen;
 see section 12.
+
+The `HSTX` build frees PIO0 completely, because HSTX is a peripheral rather
+than a PIO program. Nothing claims those four state machines today.
+
+DMA in an `HSTX` build: video takes channels 0 and 1 and `DMA_IRQ_1`, which is
+the same interrupt the PIO drivers use. Channels 0 and 1 are safe because
+PIO-USB is pinned to 7, I2S hardcodes 10 and 11 and PWM hardcodes 8 and 9. Note
+that the vendored driver used `DMA_IRQ_0` upstream and was moved, because
+`DMA_IRQ_0` is I2S here.
 
 DMA: the video drivers claim dynamically; **I2S hardcodes channels 10 and 11**
 (`drivers/audio.c:47-48`) and **PWM hardcodes 8 and 9**
@@ -531,7 +611,7 @@ skips filenames of 64 characters or more, silently
 
 ### Memory budget
 
-Measured on linked builds of all eight variants:
+Measured on linked builds of every variant:
 
 | Platform | Driver | Flash | of 4 MB | RAM | of 512 KB |
 |---|---|---|---|---|---|
@@ -543,6 +623,17 @@ Measured on linked builds of all eight variants:
 | m1 | `COMPOSITE` | 373,740 | 8.9% | 393,000 | 75.0% |
 | z0 | `HDMI_PIO_AUDIO` | 366,128 | 8.7% | 336,136 | 64.1% |
 | z0 | `HDMI_PIO` | 361,208 | 8.6% | 299,128 | 57.1% |
+| fj | `HDMI_PIO_AUDIO` | 387,464 | 2.3% of 16 MB | 352,772 | 67.3% |
+| fj | `HDMI_PIO` | 382,620 | 2.3% of 16 MB | 315,764 | 60.2% |
+| fj | `HSTX` | 381,756 | 2.3% of 16 MB | 379,904 | 72.5% |
+
+The `HSTX` figure is the tight one on the Fruit Jam, but it still sits below
+`COMPOSITE` on the other boards, so the section's advice to budget against
+`COMPOSITE` is unchanged. Where its RAM goes, over `HDMI_PIO`: a 720x256
+framebuffer is 180 KB against 160 KB for two 320x256 ones, and the audio
+data-island ring is 36 KB (`DI_RING_BUFFER_SIZE` in
+`drivers/hstx/hstx_data_island_queue.c`, statically allocated so it shows up
+here rather than in the heap).
 
 Plus, for the default m2 `HDMI_PIO_AUDIO` build: `SCRATCH_X` 2,404 B of 4 KB
 (58.7%), `SCRATCH_Y` 2,688 B of 4 KB (65.6%), `XIP_RAM` unused.
@@ -805,6 +896,46 @@ numbers at all. Five sites are guarded on them, in `board_config.h`,
 **Add a board by omitting a capability, not by inventing pin numbers for
 hardware that is not there.** Before this, the `HAS_*` macros were declared in
 three headers and read nowhere.
+
+### The `HSTX` video build
+
+`HDMI_DRIVER=HSTX` is Fruit-Jam-only and is rejected at configure time
+elsewhere. It exists because the PIO video path drops the BBC's bottom 16
+scanlines and point-samples away half the horizontal resolution of MODE 0 and
+MODE 3; both are properties of that path and both go away here. Section 6 has
+the design.
+
+What changes if you build it:
+
+- **No USB-CDC console, whatever `USB_HID` is set to.** `pll_usb` is retasked
+  to 135 MHz for `clk_hstx`, so the native USB controller has no clock. Use
+  the UART1 console on GPIO 8 and 9.
+- **The framebuffer holds RGB332 colours, not palette indices.** Anything that
+  writes a pixel has to go through `FRAMEBUFFER_PIXEL()`. Adding a new drawing
+  routine that stores a bare index will paint the wrong colour and will do it
+  silently.
+- **PWM audio is still absent and HDMI audio is still available**, so the F12
+  menu offers the same HDMI and I2S pair as the default build.
+- **The `frank-hdmi-sound` submodule is not needed.**
+
+Confirmed on hardware 2026-08-28: video output over DVI, the SD card,
+the F11 and F12 overlays, mounting a disc and SHIFT-BREAK booting it,
+screenshots, every display MODE including teletext, and **both of the faults
+this build exists to fix**. MODE 0 and MODE 3 render their 80 columns
+sharply, and all 256 scanlines reach the monitor.
+
+MODE 7 is worth calling out: this build deletes the dedicated teletext
+renderer that the PIO path needs, because at 640 pixels the SAA5050 cells
+arrive whole and there is nothing to reconstruct. That is confirmed, colour,
+double height and separated mosaic graphics included.
+
+The no-SD-card error screen is confirmed too, including its lack of
+animation: it animated by rotating the palette, which repaints nothing here,
+so this build draws it once and leaves it. Note that the screen still reboots
+on the watchdog rather than halting, which is `docs/INVESTIGATION.md`
+finding 4 and predates this work.
+
+Not yet exercised: audio on either backend, and stability over hours.
 
 ### What the board does not have
 
