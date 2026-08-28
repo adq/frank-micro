@@ -12,6 +12,7 @@
 #   HDMI_DRIVER: HDMI_PIO_AUDIO (default, HDMI-embedded audio)
 #                HDMI_PIO       (PIO HDMI/VGA + I2S/PWM audio)
 #                COMPOSITE      (software PAL/NTSC TV + I2S/PWM audio; forces 378 MHz)
+#                HSTX           (RP2350 HSTX DVI 720x576p50 + HDMI-embedded audio; fj only)
 #   USB_HID:     0 (default) PS/2 only + USB serial console
 #                1 USB HID keyboard/gamepad + PS/2 (no USB serial console)
 #

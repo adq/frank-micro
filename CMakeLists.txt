@@ -35,11 +35,24 @@ set(CPU_SPEED "252" CACHE STRING "CPU clock in MHz")
 set(PSRAM_SPEED "100" CACHE STRING "PSRAM max frequency in MHz (unused, no PSRAM required)")
 set(FLASH_SPEED "66"  CACHE STRING "Flash target max frequency in MHz")
 
-# Video driver: HDMI_PIO_AUDIO (HDMI-embedded audio), HDMI_PIO (PIO HDMI/VGA +
-# I2S/PWM audio) or COMPOSITE (software PAL/NTSC TV + I2S/PWM audio).  Declared
-# here — before the voltage is derived below — so COMPOSITE can raise CPU_SPEED.
-set(HDMI_DRIVER "HDMI_PIO_AUDIO" CACHE STRING "HDMI driver: HDMI_PIO_AUDIO, HDMI_PIO or COMPOSITE")
-set_property(CACHE HDMI_DRIVER PROPERTY STRINGS "HDMI_PIO_AUDIO" "HDMI_PIO" "COMPOSITE")
+# Video driver:
+#   HDMI_PIO_AUDIO  PIO DVI with HDMI-embedded audio (default)
+#   HDMI_PIO        PIO HDMI/VGA, I2S or PWM audio
+#   COMPOSITE       software PAL/NTSC TV, I2S or PWM audio
+#   HSTX            RP2350 HSTX DVI at 720x576p50 with HDMI-embedded audio
+# Declared here — before the voltage is derived below — so COMPOSITE can raise
+# CPU_SPEED.
+set(HDMI_DRIVER "HDMI_PIO_AUDIO" CACHE STRING "HDMI driver: HDMI_PIO_AUDIO, HDMI_PIO, COMPOSITE or HSTX")
+set_property(CACHE HDMI_DRIVER PROPERTY STRINGS "HDMI_PIO_AUDIO" "HDMI_PIO" "COMPOSITE" "HSTX")
+
+# HSTX is Fruit-Jam-only for now.  It needs eight HSTX-capable GPIOs wired as
+# four TMDS pairs, which on the RP2350 means GPIO 12 to 19 and nothing else,
+# and it is the only board this project can test on.  The M2 has the same DVI
+# pins and could take it, but moving that board would cost it the PIO
+# data-island audio that is its default sound path, untested.
+if(HDMI_DRIVER STREQUAL "HSTX" AND NOT PLATFORM STREQUAL "fj")
+    message(FATAL_ERROR "HDMI_DRIVER=HSTX is only supported on PLATFORM=fj")
+endif()
 
 # Composite TV is software-timed on Core 1 and not wired on the Z0 board.
 if(HDMI_DRIVER STREQUAL "COMPOSITE" AND PLATFORM STREQUAL "z0")
@@ -343,6 +356,59 @@ elseif(HDMI_DRIVER STREQUAL "COMPOSITE")
         hardware_i2c
         tv_driver
     )
+elseif(HDMI_DRIVER STREQUAL "HSTX")
+    # --- HSTX: RP2350 HSTX DVI at 720x576p50, RGB332, HDMI data-island audio ---
+    #
+    # No PIO at all: HSTX does the TMDS encoding in hardware and the pixel DMA
+    # reads framebuffer rows straight out of SRAM.  That frees PIO0 entirely
+    # and takes the per-scanline CPU work off core 1.
+    #
+    # drivers/hstx/ is vendored from fhoedemakers/pico_shared (GPL-3.0); see
+    # the header of drivers/hstx/video_output.h for what was changed.
+    #
+    # No HDMI_vga.c and no test_pins.c: there is no VGA ribbon on this board,
+    # so there is nothing to detect and no runtime dispatcher to build.
+    add_library(drivers
+        drivers/HDMI_hstx.c
+        drivers/hstx/video_output.c
+        drivers/hstx/hstx_packet.c
+        drivers/hstx/hstx_data_island_queue.c
+        drivers/crash_handler.c
+        drivers/tlv320dac3100.c
+        drivers/audio.c
+        drivers/audio_i2s_opt.S
+        drivers/pwm_audio/pwm_audio.c
+        drivers/psram_init.c
+        drivers/psram_allocator.c
+        drivers/dlmalloc.c
+        drivers/uart_logging.c
+    )
+    target_include_directories(drivers PUBLIC drivers drivers/hstx drivers/pwm_audio src)
+    target_compile_definitions(drivers PUBLIC
+        ${BOARD_DEF}
+        ${PLATFORM_DEF}=1
+        HDMI_HSTX=1
+    )
+    target_compile_definitions(drivers PRIVATE
+        PSRAM_MAX_FREQ_MHZ=${PSRAM_SPEED}
+    )
+    pico_generate_pio_header(drivers ${CMAKE_CURRENT_LIST_DIR}/drivers/audio_i2s.pio)
+    target_link_libraries(drivers
+        pico_stdlib
+        pico_multicore
+        hardware_dma
+        hardware_pio
+        hardware_pwm
+        hardware_spi
+        hardware_gpio
+        hardware_clocks
+        hardware_pll
+        hardware_irq
+        hardware_vreg
+        hardware_exception
+        hardware_watchdog
+        hardware_i2c
+    )
 else()
     # HDMI_PIO: original PIO HDMI driver + I2S audio
     add_library(drivers
@@ -593,6 +659,11 @@ if(HDMI_DRIVER STREQUAL "HDMI_PIO_AUDIO")
 elseif(HDMI_DRIVER STREQUAL "COMPOSITE")
     target_compile_definitions(frank-micro PRIVATE VIDEO_COMPOSITE=1)
     target_link_libraries(frank-micro tv_driver)
+elseif(HDMI_DRIVER STREQUAL "HSTX")
+    # Application code needs this too: the framebuffer holds RGB332 colours
+    # rather than palette indices, which changes what several source files
+    # write into it.  See FRAMEBUFFER_PIXEL() in drivers/HDMI.h.
+    target_compile_definitions(frank-micro PRIVATE HDMI_HSTX=1)
 endif()
 
 if(USB_HID_ENABLED)
@@ -665,7 +736,13 @@ endif()
 # so the two could in principle coexist.  Doing so means running a TinyUSB
 # device stack and a host stack in one binary, which is not attempted here; the
 # UART console above is the answer instead.
-if(USB_HID_ENABLED)
+#
+# The HSTX build has no USB-CDC either way.  clk_hstx has to be exactly
+# 135 MHz and clk_sys stays at 252 MHz, which no divider bridges, so
+# HDMI_hstx.c retasks pll_usb to 135 MHz and stops clk_usb.  That leaves the
+# native USB controller without a clock, so a CDC device cannot enumerate.
+# Nothing is lost on this board: the console is the UART above.
+if(USB_HID_ENABLED OR HDMI_DRIVER STREQUAL "HSTX")
     pico_enable_stdio_usb(frank-micro 0)
 else()
     pico_enable_stdio_usb(frank-micro 1)
