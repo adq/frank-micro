@@ -318,9 +318,11 @@ Third-party drivers and libraries:
 | TinyUSB + HID host | Ha Thach | MIT | `drivers/usbhid/` |
 | Pico-PIO-USB (USB host on PIO pins) | sekigon-gonnoc | MIT | `lib/Pico-PIO-USB/` |
 | TLV320DAC3100 codec register sequence | Matt Evans (via adafruit/pico-mac) | MIT | `drivers/tlv320dac3100.c` |
-| HSTX DVI/HDMI driver with data-island audio | Frank Hoedemakers (`fhoedemakers/pico_shared`) | GPL-3.0 | `drivers/hstx/` |
+| HSTX DVI/HDMI driver with data-island audio | [pico_shared](https://github.com/PicoPlus-devel/pico_shared) (maintained by [fhoedemakers](https://github.com/fhoedemakers)) | GPL-3.0 | `drivers/hstx/` |
 | XInput host | Ryan Wendland | MIT | `drivers/usbhid/xinput_host.*` |
 | dlmalloc | Doug Lea | CC0 / public domain | `drivers/dlmalloc.c` |
+
+> **GPLv3 and the HSTX build:** `drivers/hstx/` is vendored from a project whose LICENSE is the plain GPLv3 text with no "or later" notice, so it is taken as GPL-3.0-only. The rest of frank-micro is GPL-3.0-or-later, which combines with it freely, but a binary built with `HDMI_DRIVER=HSTX` is covered by GPLv3 alone rather than "version 3 or later". No other build variant is affected. Upstream names no copyright holder in its LICENSE and carries no per-file notices, so none are reproduced in `drivers/hstx/`.
 
 > **ROMs:** the embedded BBC OS, BASIC, and DFS/MOS ROM images are the copyright of their respective owners (Acorn Computers and successors). They are included for emulation/preservation use only.
 
@@ -335,7 +337,7 @@ Thanks to:
 - **Ha Thach** for TinyUSB, **Ryan Wendland** for the XInput host driver.
 - **sekigon-gonnoc** for [Pico-PIO-USB](https://github.com/sekigon-gonnoc/Pico-PIO-USB), which is the only way to attach a keyboard to the Fruit Jam.
 - **Matt Evans** for [pico-umac](https://github.com/evansm7/pico-umac) and **Adafruit** for the [Fruit Jam fork](https://github.com/adafruit/pico-mac) of it, whose TLV320DAC3100 bring-up sequence the codec driver is adapted from.
-- **Frank Hoedemakers** for [pico_shared](https://github.com/fhoedemakers/pico_shared), whose `pico_hdmi` driver is the basis of the HSTX video path, including the HDMI data-island audio that makes embedded sound work without PIO.
+- **[Frank Hoedemakers](https://github.com/fhoedemakers)** and the [pico_shared](https://github.com/PicoPlus-devel/pico_shared) project, whose `pico_hdmi` driver is the basis of the HSTX video path, including the HDMI data-island audio that makes embedded sound work without PIO.
 - **Doug Lea** for dlmalloc.
 - The **Murmulator** community for hardware designs and testing.
 - The **Raspberry Pi Foundation** for the RP2350 and the Pico SDK.

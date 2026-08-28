@@ -1,18 +1,40 @@
 /*
  * HSTX DVI/HDMI video output for the RP2350.
  *
- * Vendored from fhoedemakers/pico_shared, drivers/pico_hdmi (GPL-3.0), by way
- * of the copy in fhoedemakers/fruitjam-doom.  Changed for frank-micro:
+ * Vendored into frank-micro from pico_shared, drivers/pico_hdmi.
+ *
+ *   https://github.com/PicoPlus-devel/pico_shared
+ *   (formerly fhoedemakers/pico_shared, maintained by github.com/fhoedemakers)
+ *
+ * Taken by way of the vendored copy inside fhoedemakers/fruitjam-doom, which
+ * is where it was found running on Fruit Jam hardware.
+ *
+ * Upstream is licensed GPL-3.0. Its LICENSE is the plain GPLv3 text with no
+ * copyright holder filled in, and no upstream source file carries a per-file
+ * notice, so none is reproduced here and nothing below claims or reassigns
+ * copyright in the vendored code. The comment block and the declarations for
+ * video_output_set_framebuffer() are new; the rest of this header is
+ * upstream's, edited.
+ *
+ * Changed for frank-micro, and these apply to every file in this directory:
  *
  *   - 720x576p50 rather than 640x480p60, so 50 Hz matches the emulator and
- *     the BBC's 256 lines double onto the raster with room to spare.
+ *     the BBC's 256 lines double onto the raster with room to spare. Static
+ *     asserts in video_output.c check the horizontal budget adds up.
  *   - RGB332 pixels rather than RGB555.
- *   - The pixel DMA reads framebuffer rows directly.  Upstream called a
+ *   - The pixel DMA reads framebuffer rows directly. Upstream called a
  *     scanline callback into a line buffer, which cost about 21 us of core 1
- *     per line; that callback and both line buffers are gone.
+ *     per line; that callback and both line buffers are gone, replaced by
+ *     fb_row_addr[], which resolves each raster line to a source address once.
  *   - DMA_IRQ_1 rather than DMA_IRQ_0, which I2S owns in this tree.
+ *   - clk_hstx is the caller's job; see hdmi_hstx_clock_init() in
+ *     drivers/HDMI_hstx.c.
+ *   - The data-island ring is statically allocated rather than malloc'd.
+ *   - The audio packet line rate follows the mode's pixel clock rather than a
+ *     hardcoded 25.2 MHz.
+ *   - hstx.c is not vendored: it owns a 154 KB framebuffer nothing here uses.
  *
- * SPDX-License-Identifier: GPL-3.0-or-later
+ * SPDX-License-Identifier: GPL-3.0-only
  */
 
 #ifndef VIDEO_OUTPUT_H

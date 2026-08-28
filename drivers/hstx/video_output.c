@@ -1,3 +1,22 @@
+/*
+ * Vendored into frank-micro from pico_shared, drivers/pico_hdmi.
+ *
+ *   https://github.com/PicoPlus-devel/pico_shared
+ *   (formerly fhoedemakers/pico_shared, maintained by github.com/fhoedemakers)
+ *
+ * Taken by way of the vendored copy inside fhoedemakers/fruitjam-doom, which
+ * is where it was found running on Fruit Jam hardware.
+ *
+ * Upstream is licensed GPL-3.0. Its LICENSE is the plain GPLv3 text with no
+ * copyright holder filled in, and no upstream source file carries a per-file
+ * notice, so none is reproduced here and nothing below claims or reassigns
+ * copyright in the vendored code.
+ *
+ * Modified for frank-micro. The changes are listed in video_output.h.
+ *
+ * SPDX-License-Identifier: GPL-3.0-only
+ */
+
 #include "video_output.h"
 
 #include "hstx_data_island_queue.h"

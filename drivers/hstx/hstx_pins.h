@@ -9,9 +9,14 @@
 /*
  * hstx_pins.h — HSTX output pins.
  *
- * Replaces the upstream file, which hardcoded the Adafruit Metro pinout.
- * The pin numbers come from the board header, so adding a second HSTX board
- * means declaring HDMI_PIN_* there and changing nothing here.
+ * The one file in drivers/hstx/ that is not vendored: it is written from
+ * scratch and replaces the upstream file of the same name, which hardcoded
+ * the Adafruit Metro pinout as four literal GPIO numbers. The pin numbers
+ * come from the board header instead, so adding a second HSTX board means
+ * declaring HDMI_PIN_* there and changing nothing here.
+ *
+ * See video_output.h for the provenance and licence of the rest of this
+ * directory.
  *
  * video_output.c names the positive pin of each pair.  GPIOHSTXINVERTED says
  * where the negative pin of that pair is: 1 means one GPIO below the positive
