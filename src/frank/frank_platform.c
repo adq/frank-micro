@@ -136,24 +136,58 @@ void frank_perf_tick(void) {
      * The beam is the faster of the two.  It reaches the first picture row
      * about 2.4 ms after vsync and the last about 18.8 ms after it, while
      * the emulator spreads its 256 rows across the full 20 ms.  So the
-     * emulator has to start slightly *before* vsync, which is what the lead
-     * below expresses: it targets a point one frame on from the last vsync,
-     * minus the lead.
+     * emulator has to start slightly *before* vsync, which is the lead below.
      *
-     * HSTX_FRAME_LEAD_US is the number worth adjusting if a tear line shows
-     * up on hardware. Larger moves the emulator earlier.
+     * The phase is corrected a little each frame rather than snapped to.
+     * Snapping is what an earlier version did, and it chopped the sound on
+     * the I2S backend: i2s_dma_write() hands over 882 frames at a time, which
+     * is 28 ms of audio at 31250 Hz against a 20 ms video frame, and it
+     * blocks until one of its two buffers frees.  So with I2S selected the
+     * emulator is already paced in 28 ms chunks and a 20 ms lock cannot be
+     * had at all.  Arriving late from that stall with a vsync 1 ms behind us,
+     * snapping to the phase stalled a further 17 ms on top, the producer
+     * missed its deadline, and the DMA replayed its last buffer as a drone
+     * until something changed the frame cadence.
+     *
+     * A bounded nudge cannot do that.  When the emulator can keep up it pulls
+     * into phase within about a second and the picture is clean; when audio
+     * is pacing instead, the phase error simply persists and the picture
+     * tears, which is the right way round.  A tear line is worth less than
+     * clean sound.
+     *
+     * HSTX_FRAME_LEAD_US is what to adjust if a tear line shows up while the
+     * lock is holding.  Larger moves the emulator earlier.
+     * HSTX_PHASE_GAIN is the divisor for the per-frame correction, so 16
+     * corrects about 6% of the error per frame and never moves the target by
+     * more than half a frame over the gain.
      */
 #define HSTX_FRAME_LEAD_US 1500u
-    if (g_frank_limit_speed) {
-        uint32_t target = hdmi_hstx_vsync_us() + FRAME_PERIOD_US - HSTX_FRAME_LEAD_US;
-        int32_t wait = (int32_t)(target - time_us_32());
-        /* Never stall more than one frame: if the phase is far out, take the
-         * hit on this frame and let the next vsync bring it back. */
-        if (wait > (int32_t)FRAME_PERIOD_US) wait = (int32_t)FRAME_PERIOD_US;
-        if (wait > 0) busy_wait_us_32((uint32_t)wait);
-    }
-    next_frame = 0;
+#define HSTX_PHASE_GAIN    16
     uint64_t now = time_us_64();
+    if (!g_frank_limit_speed) {
+        next_frame = 0;   /* re-prime when throttling resumes */
+    } else if (next_frame == 0) {
+        next_frame = now + FRAME_PERIOD_US;
+    } else {
+        /* Phase error against the point one frame on from the last vsync,
+         * minus the lead.  Both clocks are the same timer, so comparing the
+         * low 32 bits is safe.  Wrapped into plus or minus half a frame so
+         * the correction always takes the short way round. */
+        int32_t phase = (int32_t)((uint32_t)next_frame
+                                  - (hdmi_hstx_vsync_us() + FRAME_PERIOD_US - HSTX_FRAME_LEAD_US));
+        while (phase >  (int32_t)(FRAME_PERIOD_US / 2)) phase -= (int32_t)FRAME_PERIOD_US;
+        while (phase < -(int32_t)(FRAME_PERIOD_US / 2)) phase += (int32_t)FRAME_PERIOD_US;
+        next_frame -= phase / HSTX_PHASE_GAIN;
+
+        if ((int64_t)(next_frame - now) > 0)
+            busy_wait_until(from_us_since_boot(next_frame));
+        next_frame += FRAME_PERIOD_US;
+        /* Resync if we have fallen far behind, which is the normal state
+         * while a blocking audio backend is setting the pace. */
+        now = time_us_64();
+        if ((int64_t)(now - next_frame) > (int64_t)FRAME_PERIOD_US)
+            next_frame = now + FRAME_PERIOD_US;
+    }
 #else
     uint64_t now = time_us_64();
     if (!g_frank_limit_speed) {
